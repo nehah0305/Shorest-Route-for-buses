@@ -26,55 +26,34 @@ class RouteOptimizer:
     def calculate_distance_matrix(
         self,
         locations: np.ndarray,
-        depot: Optional[np.ndarray] = None
+        depot: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
-        Calculate pairwise distances between all locations (vectorised).
+        Calculate pairwise Euclidean distances between all locations (vectorised).
 
         Args:
-            locations: Array of shape (n, 2) with [lat, lon]
-            depot: Optional depot location – if supplied it is NOT prepended;
-                   the caller is responsible for managing index offsets.
+            locations: Array of shape (n, 2) with [x, y] in abstract map units.
+            depot:     Ignored (kept for API compatibility).
 
         Returns:
-            Distance matrix of shape (n, n)
+            Distance matrix of shape (n, n).
         """
-        n = len(locations)
-        lat = np.radians(locations[:, 0])
-        lon = np.radians(locations[:, 1])
-
-        # Vectorised Haversine via broadcasting
-        dlat = lat[:, None] - lat[None, :]   # (n, n)
-        dlon = lon[:, None] - lon[None, :]
-        a = np.sin(dlat / 2) ** 2 + (
-            np.cos(lat[:, None]) * np.cos(lat[None, :]) * np.sin(dlon / 2) ** 2
-        )
-        dist_matrix = 6371.0 * 2 * np.arcsin(np.sqrt(a))
+        diff = locations[:, None, :] - locations[None, :, :]   # (n, n, 2)
+        dist_matrix = np.sqrt((diff ** 2).sum(axis=2))
         np.fill_diagonal(dist_matrix, 0.0)
-
         self.distance_matrix = dist_matrix
         return dist_matrix
-    
+
     @staticmethod
-    def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """
-        Calculate great-circle distance between two geographic points.
-        
-        Args:
-            lat1, lon1: Latitude and longitude of first point (degrees)
-            lat2, lon2: Latitude and longitude of second point (degrees)
-        
-        Returns:
-            Distance in kilometers
-        """
-        lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
-        
-        dlat = lat2 - lat1
-        dlon = lon2 - lon1
-        a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
-        c = 2 * np.arcsin(np.sqrt(a))
-        
-        return 6371 * c  # Earth's radius in km
+    def euclidean_distance(x1: float, y1: float, x2: float, y2: float) -> float:
+        """Euclidean distance between two points in abstract map units."""
+        return float(np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2))
+
+    # Keep old name as an alias so any external callers don't break.
+    @staticmethod
+    def haversine_distance(x1: float, y1: float, x2: float, y2: float) -> float:
+        """Alias for euclidean_distance (replaces Haversine for custom maps)."""
+        return float(np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2))
     
     def nearest_neighbor(
         self,
@@ -322,10 +301,10 @@ class RouteOptimizer:
         # Add depot→first and last→destination distances
         first_stop = pickup_locations[visit_order[0]]
         last_stop  = pickup_locations[visit_order[-1]]
-        depot_to_first = self.haversine_distance(
+        depot_to_first = self.euclidean_distance(
             depot[0], depot[1], first_stop[0], first_stop[1]
         )
-        last_to_dest = self.haversine_distance(
+        last_to_dest = self.euclidean_distance(
             last_stop[0], last_stop[1], destination[0], destination[1]
         )
         # Remove the artificial return-to-start leg that NN added

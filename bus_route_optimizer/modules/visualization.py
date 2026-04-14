@@ -1,15 +1,13 @@
 """
-Visualization Module: Visualize routes and clusters on maps
+Visualization Module: Static plots of routes and clusters on the custom 2-D map.
 
-Provides functions to create interactive maps using folium
-and static plots using matplotlib.
+Uses matplotlib for offline/CLI rendering.  The Streamlit UI renders its own
+interactive Plotly map — this module is used only by main.py when
+visualize=True.
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
-import folium
-from folium import plugins
 from typing import Dict, List, Optional, Tuple
 import warnings
 warnings.filterwarnings('ignore')
@@ -62,32 +60,32 @@ class RouteVisualizer:
                 color = colors[cluster_id % len(colors)]
                 marker = 'o'
                 label = f'Cluster {cluster_id}'
-            
+
             cluster_points = pickup_locations[indices]
             ax.scatter(
-                cluster_points[:, 1], cluster_points[:, 0],
+                cluster_points[:, 0], cluster_points[:, 1],   # x, y
                 c=[color], marker=marker, s=100, label=label,
                 alpha=0.7, edgecolors='black', linewidth=0.5
             )
-        
+
         # Plot cluster centers
         if centers is not None:
             ax.scatter(
-                centers[:, 1], centers[:, 0],
+                centers[:, 0], centers[:, 1],   # x, y
                 marker='*', s=500, c='red', edgecolors='black',
                 linewidth=1, label='Cluster Centers', zorder=5
             )
-        
+
         # Plot depot
         if depot is not None:
             ax.scatter(
-                depot[1], depot[0],
+                depot[0], depot[1],   # x, y
                 marker='s', s=300, c='green', edgecolors='black',
                 linewidth=1.5, label='Depot', zorder=5
             )
-        
-        ax.set_xlabel('Longitude', fontsize=11)
-        ax.set_ylabel('Latitude', fontsize=11)
+
+        ax.set_xlabel('X', fontsize=11)
+        ax.set_ylabel('Y', fontsize=11)
         ax.set_title(title, fontsize=13, fontweight='bold')
         ax.legend(loc='best', fontsize=9)
         ax.grid(True, alpha=0.3)
@@ -127,46 +125,44 @@ class RouteVisualizer:
         
         # Plot pickup points
         ax.scatter(
-            pickup_locations[:, 1], pickup_locations[:, 0],
+            pickup_locations[:, 0], pickup_locations[:, 1],   # x, y
             c='blue', marker='o', s=100, alpha=0.6,
             edgecolors='black', linewidth=0.5, label='Pickup Points'
         )
-        
+
         # Plot route path
-        route_path = [depot] + pickup_locations[route[:-1]] + [destination]
+        route_path = [depot] + pickup_locations[route[:-1]].tolist() + [destination]
         for i in range(len(route_path) - 1):
             start = route_path[i]
             end = route_path[i + 1]
-            ax.arrow(
-                start[1], start[0], end[1] - start[1], end[0] - start[0],
-                head_width=0.0005, head_length=0.0003, fc='red', ec='red',
-                alpha=0.6, linewidth=1.5
-            )
-        
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            ax.annotate("", xy=(end[0], end[1]), xytext=(start[0], start[1]),
+                        arrowprops=dict(arrowstyle="->", color="red", lw=1.5))
+
         # Plot depot and destination
         ax.scatter(
-            depot[1], depot[0],
+            depot[0], depot[1],   # x, y
             marker='s', s=300, c='green', edgecolors='black',
             linewidth=1.5, label='Depot', zorder=5
         )
-        
+
         if not np.allclose(destination, depot):
             ax.scatter(
-                destination[1], destination[0],
+                destination[0], destination[1],   # x, y
                 marker='^', s=300, c='purple', edgecolors='black',
                 linewidth=1.5, label='Destination', zorder=5
             )
-        
+
         # Add stop numbers
         for idx, point in enumerate(pickup_locations[route[:-1]]):
             ax.annotate(
-                str(idx + 1), (point[1], point[0]),
+                str(idx + 1), (point[0], point[1]),   # x, y
                 fontsize=8, ha='center', va='center',
                 bbox=dict(boxstyle='circle', facecolor='yellow', alpha=0.7)
             )
-        
-        ax.set_xlabel('Longitude', fontsize=11)
-        ax.set_ylabel('Latitude', fontsize=11)
+
+        ax.set_xlabel('X', fontsize=11)
+        ax.set_ylabel('Y', fontsize=11)
         ax.set_title(title, fontsize=13, fontweight='bold')
         ax.legend(loc='best', fontsize=9)
         ax.grid(True, alpha=0.3)
@@ -209,42 +205,42 @@ class RouteVisualizer:
         
         # Plot pickup points
         ax.scatter(
-            pickup_locations[:, 1], pickup_locations[:, 0],
+            pickup_locations[:, 0], pickup_locations[:, 1],   # x, y
             c='lightblue', marker='o', s=100, alpha=0.6,
             edgecolors='black', linewidth=0.5, label='Pickup Points', zorder=2
         )
-        
+
         # Plot each route
         for route_id, route in enumerate(routes):
             color = colors[route_id]
-            route_path = [depot] + pickup_locations[route[:-1]] + [destination]
-            
+            route_path = [depot] + pickup_locations[route[:-1]].tolist() + [destination]
+
             # Plot path
             for i in range(len(route_path) - 1):
                 start = route_path[i]
                 end = route_path[i + 1]
                 ax.plot(
-                    [start[1], end[1]], [start[0], end[0]],
+                    [start[0], end[0]], [start[1], end[1]],   # x, y
                     color=color, linewidth=2, alpha=0.7,
                     label=f'Bus {route_id + 1}' if i == 0 else ''
                 )
-        
+
         # Plot depot and destination
         ax.scatter(
-            depot[1], depot[0],
+            depot[0], depot[1],   # x, y
             marker='s', s=300, c='green', edgecolors='black',
             linewidth=1.5, label='Depot', zorder=5
         )
-        
+
         if not np.allclose(destination, depot):
             ax.scatter(
-                destination[1], destination[0],
+                destination[0], destination[1],   # x, y
                 marker='^', s=300, c='purple', edgecolors='black',
                 linewidth=1.5, label='Destination', zorder=5
             )
-        
-        ax.set_xlabel('Longitude', fontsize=11)
-        ax.set_ylabel('Latitude', fontsize=11)
+
+        ax.set_xlabel('X', fontsize=11)
+        ax.set_ylabel('Y', fontsize=11)
         ax.set_title(title, fontsize=13, fontweight='bold')
         ax.legend(loc='best', fontsize=9)
         ax.grid(True, alpha=0.3)
@@ -265,84 +261,14 @@ class RouteVisualizer:
         destination: Optional[np.ndarray] = None,
         title: str = "Bus Route Map",
         zoom_start: int = 13,
-        save_path: Optional[str] = None
-    ) -> folium.Map:
+        save_path: Optional[str] = None,
+    ) -> None:
         """
-        Create an interactive map using folium.
-        
-        Args:
-            pickup_locations: Array of shape (n, 2) with [lat, lon]
-            route: Route (list of indices)
-            depot: Starting location
-            destination: Destination location
-            title: Map title
-            zoom_start: Initial zoom level
-            save_path: Path to save HTML map
-        
-        Returns:
-            folium Map object
+        Stub: interactive map is now rendered in the Streamlit UI via Plotly.
+        Saves a simple matplotlib PNG when save_path is supplied.
         """
-        if destination is None:
-            destination = depot
-        
-        # Calculate map center
-        center_lat = np.mean(pickup_locations[:, 0])
-        center_lon = np.mean(pickup_locations[:, 1])
-        
-        # Create map
-        m = folium.Map(
-            location=[center_lat, center_lon],
-            zoom_start=zoom_start,
-            tiles='OpenStreetMap'
-        )
-        
-        # Add route path
-        route_path = [depot.tolist()] + pickup_locations[route[:-1]].tolist() + [destination.tolist()]
-        
-        # Draw route
-        folium.PolyLine(
-            route_path,
-            color='red',
-            weight=2,
-            opacity=0.8,
-            popup=title
-        ).add_to(m)
-        
-        # Add markers for pickup points
-        for idx, point in enumerate(pickup_locations[route[:-1]]):
-            folium.CircleMarker(
-                location=[point[0], point[1]],
-                radius=8,
-                popup=f"Stop {idx + 1}",
-                color='blue',
-                fill=True,
-                fillColor='blue',
-                fillOpacity=0.7
-            ).add_to(m)
-        
-        # Add depot marker
-        folium.Marker(
-            location=depot.tolist(),
-            popup="Depot (Start)",
-            icon=folium.Icon(color='green', icon='home')
-        ).add_to(m)
-        
-        # Add destination marker
-        if not np.allclose(destination, depot):
-            folium.Marker(
-                location=destination.tolist(),
-                popup="Destination (End)",
-                icon=folium.Icon(color='purple', icon='flag')
-            ).add_to(m)
-        
-        # Add route info
-        m.add_child(folium.LatLngPopup())
-        
-        if save_path:
-            m.save(save_path)
-            print(f"Interactive map saved to {save_path}")
-        
-        return m
+        self.plot_route(pickup_locations, route, depot, destination,
+                        title=title, save_path=save_path)
     
     def plot_route_statistics(
         self,

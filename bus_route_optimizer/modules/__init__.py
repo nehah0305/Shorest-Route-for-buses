@@ -6,11 +6,13 @@ from .clustering import Clustering
 from .route_optimizer import RouteOptimizer
 from .visualization import RouteVisualizer
 from .reinforcement_learning import RLOptimizer
+from .gamification import GamificationEngine
 
 __all__ = [
     "DataGenerator",
     "Clustering",
     "RouteOptimizer",
     "RouteVisualizer",
-    "RLOptimizer"
+    "RLOptimizer",
+    "GamificationEngine",
 ]

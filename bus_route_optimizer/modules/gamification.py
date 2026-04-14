@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 ACHIEVEMENTS = {
     "first_run":        {"name": "🚌 First Run",      "desc": "Complete your first optimisation",          "xp": 50},
     "speed_demon":      {"name": "⚡ Speed Demon",    "desc": "Finish optimisation in under 2 seconds",    "xp": 75},
-    "fuel_saver":       {"name": "🌿 Fuel Saver",     "desc": "Keep total fuel under 10 litres",           "xp": 100},
+    "fuel_saver":       {"name": "🌿 Fuel Saver",     "desc": "Keep total fuel under 45 litres",           "xp": 100},
     "efficiency_ace":   {"name": "🎯 Efficiency Ace", "desc": "Score 80 or above",                         "xp": 150},
     "route_master":     {"name": "🏆 Route Master",   "desc": "Score 90 or above",                         "xp": 250},
     "perfect_score":    {"name": "💎 Perfect Score",  "desc": "Score 95 or above",                         "xp": 500},
@@ -62,16 +62,19 @@ class GamificationEngine:
         """
         stops_per_bus = max(num_stops / max(num_buses, 1), 1)
 
-        # Distance: target ≤ 5 km/stop → 100 pts; ≥ 20 km/stop → 0 pts
+        # Distance: target ≤ 10 units/stop → 100 pts; ≥ 30 units/stop → 0 pts
+        # (on a default 100×100 map, typical inter-stop spacing ≈ 10-18 units)
         km_per_stop = total_distance_km / max(num_stops, 1)
-        dist_score = max(0.0, 100.0 - (km_per_stop - 5.0) * (100.0 / 15.0))
+        dist_score = max(0.0, 100.0 - (km_per_stop - 10.0) * (100.0 / 20.0))
 
-        # Time: target ≤ 10 min/stop → 100 pts; ≥ 40 min/stop → 0 pts
+        # Time: target ≤ 20 min/stop → 100 pts; ≥ 70 min/stop → 0 pts
+        # (using estimate_travel_time speed of 30 units/h: 10 units ≈ 20 min)
         min_per_stop = total_time_min / max(num_stops, 1)
-        time_score = max(0.0, 100.0 - (min_per_stop - 10.0) * (100.0 / 30.0))
+        time_score = max(0.0, 100.0 - (min_per_stop - 20.0) * (100.0 / 50.0))
 
-        # Fuel: target ≤ 8 L → 100 pts; ≥ 25 L → 0 pts
-        fuel_score = max(0.0, 100.0 - (total_fuel_litres - 8.0) * (100.0 / 17.0))
+        # Fuel: target ≤ 50 L → 100 pts; ≥ 150 L → 0 pts
+        # (using estimate_fuel_consumption at 5 units/L: 250 units → 50 L)
+        fuel_score = max(0.0, 100.0 - (total_fuel_litres - 50.0) * (100.0 / 100.0))
 
         # Wall-clock speed bonus (max 10 pts)
         speed_bonus = max(0.0, 10.0 - elapsed_seconds * 2.0)
@@ -112,24 +115,31 @@ class GamificationEngine:
         """Return list of newly unlocked achievement dicts."""
         earned = []
 
-        def _check(key: bool, ach_id: str):
-            if key:
-                earned.append(ACHIEVEMENTS[ach_id])
+        def _check(condition: bool, ach_id: str):
+            if condition:
+                earned.append({**ACHIEVEMENTS[ach_id], "id": ach_id})
 
-        _check(session_count == 1,              "first_run")
-        _check(elapsed_seconds < 2.0,           "speed_demon")
-        _check(total_fuel < 10.0,              "fuel_saver")
-        _check(score >= 80,                     "efficiency_ace")
-        _check(score >= 90,                     "route_master")
-        _check(score >= 95,                     "perfect_score")
-        _check(num_buses >= 5,                  "cluster_king")
+        _check(session_count == 1,                 "first_run")
+        _check(elapsed_seconds < 2.0,              "speed_demon")
+        _check(total_fuel < 45.0,                  "fuel_saver")
+        _check(score >= 80,                        "efficiency_ace")
+        _check(score >= 90,                        "route_master")
+        _check(score >= 95,                        "perfect_score")
+        _check(num_buses >= 5,                     "cluster_king")
         _check(num_stops <= 10 and num_buses == 1, "minimalist")
-        _check(routing_method == "dp",          "dp_devotee")
-        _check(routing_method == "hybrid",      "hybrid_hero")
-        _check(session_count == 5,              "run_5")
-        _check(session_count == 10,             "run_10")
+        _check(routing_method == "dp",             "dp_devotee")
+        _check(routing_method == "hybrid",         "hybrid_hero")
+        _check(session_count == 5,                 "run_5")
+        _check(session_count == 10,                "run_10")
 
         return earned
+
+    # ──────────────────────────── Gallery helper ──────────────────────────────
+
+    @staticmethod
+    def all_achievements() -> List[Dict]:
+        """Return every achievement definition with its id attached."""
+        return [{**v, "id": k} for k, v in ACHIEVEMENTS.items()]
 
     # ──────────────────────────── Leaderboard ────────────────────────────────
 

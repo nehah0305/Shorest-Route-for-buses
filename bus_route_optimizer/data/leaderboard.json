@@ -1,6 +1,44 @@
 [
   {
     "player": "Optimizer",
+    "score": 86.7,
+    "stars": 4,
+    "xp_earned": 295,
+    "achievements": [
+      "\u26a1 Speed Demon",
+      "\ud83c\udfaf Efficiency Ace",
+      "\ud83e\uddb8 Hybrid Hero"
+    ],
+    "config": {
+      "stops": 30,
+      "buses": 2,
+      "clustering": "kmeans",
+      "routing": "hybrid",
+      "city": "\ud83d\uddfd New York City"
+    },
+    "timestamp": "2026-04-14 14:11"
+  },
+  {
+    "player": "Optimizer",
+    "score": 86.7,
+    "stars": 4,
+    "xp_earned": 295,
+    "achievements": [
+      "\u26a1 Speed Demon",
+      "\ud83c\udfaf Efficiency Ace",
+      "\ud83e\uddb8 Hybrid Hero"
+    ],
+    "config": {
+      "stops": 30,
+      "buses": 2,
+      "clustering": "kmeans",
+      "routing": "hybrid",
+      "city": "\ud83d\uddfd New York City"
+    },
+    "timestamp": "2026-04-14 14:11"
+  },
+  {
+    "player": "Optimizer",
     "score": 86.4,
     "stars": 4,
     "xp_earned": 345,
@@ -17,5 +55,64 @@
       "routing": "hybrid"
     },
     "timestamp": "2026-04-14 12:19"
+  },
+  {
+    "player": "Optimizer",
+    "score": 86.4,
+    "stars": 4,
+    "xp_earned": 295,
+    "achievements": [
+      "\u26a1 Speed Demon",
+      "\ud83c\udfaf Efficiency Ace",
+      "\ud83e\uddb8 Hybrid Hero"
+    ],
+    "config": {
+      "stops": 30,
+      "buses": 2,
+      "clustering": "kmeans",
+      "routing": "hybrid",
+      "city": "\ud83d\uddfd New York City"
+    },
+    "timestamp": "2026-04-14 14:10"
+  },
+  {
+    "player": "Optimizer",
+    "score": 86.4,
+    "stars": 4,
+    "xp_earned": 395,
+    "achievements": [
+      "\u26a1 Speed Demon",
+      "\ud83c\udfaf Efficiency Ace",
+      "\ud83e\uddb8 Hybrid Hero",
+      "\ud83d\udd01 Consistent"
+    ],
+    "config": {
+      "stops": 30,
+      "buses": 2,
+      "clustering": "kmeans",
+      "routing": "hybrid",
+      "city": "\ud83d\uddfd New York City",
+      "challenge": false
+    },
+    "timestamp": "2026-04-14 17:02"
+  },
+  {
+    "player": "Optimizer",
+    "score": 11.6,
+    "stars": 1,
+    "xp_earned": 145,
+    "achievements": [
+      "\u26a1 Speed Demon",
+      "\ud83e\uddb8 Hybrid Hero"
+    ],
+    "config": {
+      "stops": 20,
+      "buses": 2,
+      "clustering": "kmeans",
+      "routing": "hybrid",
+      "map_style": "Grid City",
+      "challenge": false
+    },
+    "timestamp": "2026-04-14 17:19"
   }
 ]

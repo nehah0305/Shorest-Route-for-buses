@@ -1,10 +1,12 @@
 """
-🚌 Bus Route Optimizer — Gamified Streamlit UI
+🚌 Bus Route Optimizer — Gamified Streamlit UI  (custom map edition)
 Run with:  streamlit run app.py   (from inside bus_route_optimizer/)
 """
 
 import os, sys, time
+from datetime import date
 import numpy as np
+import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
@@ -12,13 +14,10 @@ import plotly.express as px
 # ── make sure local modules are importable regardless of cwd ──────────────────
 sys.path.insert(0, os.path.dirname(__file__))
 
-from modules.data_generator import DataGenerator
-from modules.clustering import Clustering
-from modules.route_optimizer import RouteOptimizer
-from modules.visualization import RouteVisualizer
-from modules.reinforcement_learning import RLOptimizer
 from modules.gamification import GamificationEngine
+from modules.utils import ReportGenerator
 from main import BusRouteOptimization
+from modules.data_generator import DataGenerator
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -34,23 +33,151 @@ st.markdown("""
   .score-card   { background:#1e293b; border-radius:12px; padding:18px; text-align:center; }
   .score-number { font-size:3rem; font-weight:800; color:#38bdf8; }
   .star-row     { font-size:1.8rem; }
-  .badge        { background:#334155; border-radius:8px; padding:6px 10px;
-                  display:inline-block; margin:3px; font-size:.85rem; }
   .achievement  { background:#064e3b; color:#6ee7b7; border-radius:8px;
                   padding:8px 12px; margin:4px; display:inline-block; }
-  .metric-card  { background:#0f172a; border-radius:10px; padding:14px;
-                  border-left: 4px solid #38bdf8; }
   h1 { color:#f1f5f9 !important; }
 </style>
 """, unsafe_allow_html=True)
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+ALGO_INFO = {
+    "hybrid": ("Hybrid (NN + 2-opt)", "Greedy nearest-neighbour seed refined with 2-opt edge swaps. Best quality/speed balance. Recommended for most runs."),
+    "nn":     ("Nearest Neighbour",   "Pure greedy heuristic — fastest but lowest quality. Great for quick previews."),
+    "dp":     ("Dynamic Programming", "Held-Karp exact algorithm (optimal). Exponential cost; only runs when ≤15 stops per cluster."),
+}
+
+MAP_STYLES = ["Grid City", "District Zones", "Open Field"]
+
+BUS_PALETTE = ["#ef4444", "#3b82f6", "#22c55e", "#a855f7", "#f97316", "#06b6d4"]
 
 # ── State ─────────────────────────────────────────────────────────────────────
 if "gamification" not in st.session_state:
     st.session_state.gamification = GamificationEngine()
 if "history" not in st.session_state:
     st.session_state.history = []
+if "total_xp" not in st.session_state:
+    st.session_state.total_xp = 0
+if "earned_ids" not in st.session_state:
+    st.session_state.earned_ids = set()
+if "cmp_results" not in st.session_state:
+    st.session_state.cmp_results = {}
 
 engine: GamificationEngine = st.session_state.gamification
+
+
+# ── Custom map renderer ───────────────────────────────────────────────────────
+def render_custom_map(
+    dataset: dict,
+    results: dict,
+    style: str = "Grid City",
+    height: int = 560,
+) -> go.Figure:
+    """
+    Render a styled 2-D custom map of all bus routes using Plotly.
+
+    coordinate convention: col-0 = X (horizontal), col-1 = Y (vertical).
+    """
+    pickup_locs = dataset["pickup_locations"]
+    depot       = dataset["depot"]
+    dest        = dataset["destination"]
+    mw          = float(dataset.get("map_width",  100))
+    mh          = float(dataset.get("map_height", 100))
+
+    fig = go.Figure()
+
+    # ── Background & style ───────────────────────────────────────────────────
+    fig.add_shape(type="rect", x0=0, y0=0, x1=mw, y1=mh,
+                  fillcolor="#0f172a", line=dict(color="#334155", width=1))
+
+    if style == "Grid City":
+        step = max(mw, mh) / 10
+        for v in np.arange(0, mw + step, step):
+            fig.add_shape(type="line", x0=v, y0=0, x1=v, y1=mh,
+                          line=dict(color="#1e293b", width=1))
+        for h in np.arange(0, mh + step, step):
+            fig.add_shape(type="line", x0=0, y0=h, x1=mw, y1=h,
+                          line=dict(color="#1e293b", width=1))
+
+    elif style == "District Zones":
+        zones = [
+            (0,     0,     mw/2, mh/2, "#0c1e2d", "Residential"),
+            (mw/2,  0,     mw,   mh/2, "#0c2d1a", "Commercial"),
+            (0,     mh/2,  mw/2, mh,   "#2d0c1a", "Industrial"),
+            (mw/2,  mh/2,  mw,   mh,   "#1a0c2d", "University"),
+        ]
+        zone_colors = ["#164e63", "#14532d", "#7f1d1d", "#3b0764"]
+        for i, (x0, y0, x1, y1, fc, label) in enumerate(zones):
+            fig.add_shape(type="rect", x0=x0, y0=y0, x1=x1, y1=y1,
+                          fillcolor=fc, line=dict(color=zone_colors[i], width=1.5))
+            fig.add_annotation(x=(x0+x1)/2, y=(y0+y1)/2, text=label,
+                               font=dict(color="#475569", size=10), showarrow=False)
+
+    # ── Route lines ──────────────────────────────────────────────────────────
+    for bus_i, detail in enumerate(results["route_details"]):
+        color = BUS_PALETTE[bus_i % len(BUS_PALETTE)]
+        wpts  = detail["waypoints"]
+        xs    = [float(p[0]) for p in wpts]
+        ys    = [float(p[1]) for p in wpts]
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="lines",
+            line=dict(color=color, width=2.5),
+            name=f"🚌 Bus {bus_i+1}",
+            hoverinfo="skip",
+        ))
+
+    # ── Stop markers (per bus, numbered) ────────────────────────────────────
+    for bus_i, detail in enumerate(results["route_details"]):
+        color = BUS_PALETTE[bus_i % len(BUS_PALETTE)]
+        for stop_i, idx in enumerate(detail["route"]):
+            pt = pickup_locs[idx]
+            fig.add_trace(go.Scatter(
+                x=[float(pt[0])], y=[float(pt[1])],
+                mode="markers+text",
+                marker=dict(size=13, color=color,
+                            line=dict(color="white", width=1)),
+                text=[str(stop_i + 1)],
+                textposition="middle center",
+                textfont=dict(size=7, color="white"),
+                showlegend=False,
+                hovertext=(f"Bus {bus_i+1} · Stop {stop_i+1}<br>"
+                           f"x={pt[0]:.1f}, y={pt[1]:.1f}"),
+                hoverinfo="text",
+            ))
+
+    # ── Depot & Destination ──────────────────────────────────────────────────
+    fig.add_trace(go.Scatter(
+        x=[float(depot[0])], y=[float(depot[1])],
+        mode="markers+text",
+        marker=dict(size=20, color="#22c55e", symbol="square",
+                    line=dict(color="white", width=2)),
+        text=["🏠"], textposition="top center",
+        name="Depot", hovertext="Depot", hoverinfo="text",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[float(dest[0])], y=[float(dest[1])],
+        mode="markers+text",
+        marker=dict(size=20, color="#a855f7", symbol="diamond",
+                    line=dict(color="white", width=2)),
+        text=["🏫"], textposition="top center",
+        name="Destination", hovertext="Destination", hoverinfo="text",
+    ))
+
+    # ── Layout ───────────────────────────────────────────────────────────────
+    fig.update_layout(
+        plot_bgcolor="#0f172a",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#94a3b8"),
+        xaxis=dict(range=[-2, mw + 2], showgrid=False, zeroline=False,
+                   title="X", color="#475569", constrain="domain"),
+        yaxis=dict(range=[-2, mh + 2], showgrid=False, zeroline=False,
+                   title="Y", color="#475569", scaleanchor="x", scaleratio=1),
+        legend=dict(bgcolor="rgba(30,41,59,0.85)", bordercolor="#334155",
+                    borderwidth=1, font=dict(size=11)),
+        margin=dict(t=10, b=30, l=40, r=10),
+        height=height,
+        hovermode="closest",
+    )
+    return fig
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -58,12 +185,21 @@ with st.sidebar:
     st.divider()
 
     player_name = st.text_input("👤 Player Name", value="Optimizer")
+
     st.divider()
-    st.subheader("📍 Dataset")
-    num_stops  = st.slider("Pickup Stops",  min_value=5,  max_value=60, value=30, step=5)
-    num_buses  = st.slider("Number of Buses", min_value=1, max_value=6, value=2)
-    radius_km  = st.slider("City Radius (km)", min_value=2, max_value=25, value=10)
-    seed       = st.number_input("Random Seed", min_value=0, max_value=9999, value=42, step=1)
+    st.subheader("🗺️ Map Settings")
+    map_style  = st.selectbox("Map Style", MAP_STYLES)
+    map_width  = st.slider("Map Width  (units)", 50, 200, 100, 10)
+    map_height = st.slider("Map Height (units)", 50, 200, 100, 10)
+
+    st.subheader("📍 Stops")
+    stop_mode = st.radio("Stop Placement", ["🎲 Random", "✏️ Custom"], horizontal=True)
+
+    num_stops = st.slider("Pickup Stops", min_value=3, max_value=60, value=20, step=1,
+                          disabled=(stop_mode == "✏️ Custom"))
+    num_buses = st.slider("Number of Buses", min_value=1, max_value=6, value=2)
+    seed      = st.number_input("Random Seed", min_value=0, max_value=9999, value=42, step=1,
+                                disabled=(stop_mode == "✏️ Custom"))
 
     st.divider()
     st.subheader("⚙️ Algorithm")
@@ -71,30 +207,71 @@ with st.sidebar:
     routing_method    = st.selectbox("Routing (TSP)", ["hybrid", "nn", "dp"])
     use_rl            = st.checkbox("Enable RL Optimizer", value=True)
 
+    algo_name, algo_desc = ALGO_INFO[routing_method]
+    with st.expander(f"ℹ️ About: {algo_name}"):
+        st.caption(algo_desc)
+
+    st.divider()
+    st.subheader("🎯 Challenge Mode")
+    challenge_on = st.toggle("Daily Challenge", value=False,
+                             help="Lock everything to today's seed (30 stops, 3 buses, 100×100 map). "
+                                  "Compete with others on identical conditions!")
+    if challenge_on:
+        _today_seed = int(date.today().strftime("%Y%m%d")) % 10000
+        num_stops, num_buses, seed = 30, 3, _today_seed
+        map_width, map_height = 100, 100
+        st.info(f"📅 Today's seed: **{_today_seed}** — 100×100 map, 30 stops, 3 buses")
+
     st.divider()
     run_btn = st.button("🚀 Run Optimisation", use_container_width=True, type="primary")
 
     st.divider()
     st.subheader("📊 Session Stats")
-    st.metric("Total Runs", len(st.session_state.history))
+    col_a, col_b = st.columns(2)
+    col_a.metric("Total Runs", len(st.session_state.history))
+    col_b.metric("Total XP ✨", st.session_state.total_xp)
     if st.session_state.history:
         best = max(st.session_state.history, key=lambda x: x["score"])
-        st.metric("Best Score", f"{best['score']:.1f}")
+        st.metric("🏆 Best Score", f"{best['score']:.1f}  {best['star_display']}")
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.title("🚌 Bus Route Optimizer")
 st.caption("Shortest-route planning with K-Means clustering, TSP solving, and Q-Learning — now gamified!")
 
 # ── Run optimisation ──────────────────────────────────────────────────────────
+# ── Custom stop editor (shown only in Custom mode) ────────────────────────────
+custom_locs = None
+if stop_mode == "✏️ Custom":
+    st.subheader("✏️ Place Your Stops")
+    st.caption(f"Enter x/y coordinates. Valid range: 0 – {map_width} (x),  0 – {map_height} (y).")
+    default_df = pd.DataFrame({
+        "x": np.round(np.random.uniform(10, map_width  - 10, 8), 1).tolist(),
+        "y": np.round(np.random.uniform(10, map_height - 10, 8), 1).tolist(),
+    })
+    edited = st.data_editor(
+        default_df, num_rows="dynamic", use_container_width=True,
+        column_config={
+            "x": st.column_config.NumberColumn("X", min_value=0, max_value=map_width,  step=0.5),
+            "y": st.column_config.NumberColumn("Y", min_value=0, max_value=map_height, step=0.5),
+        },
+    )
+    if len(edited) < 2:
+        st.warning("Add at least 2 stops to run optimisation.")
+    else:
+        custom_locs = edited[["x", "y"]].dropna().values
+        num_stops   = len(custom_locs)
+
+# ── Run optimisation ──────────────────────────────────────────────────────────
 if run_btn:
-    with st.spinner("⚙️ Generating dataset and optimising routes…"):
+    with st.spinner("⚙️ Building map and optimising routes…"):
         t0 = time.time()
         generator = DataGenerator(seed=int(seed))
         dataset   = generator.generate_dataset(
             num_pickup_points=num_stops,
             num_buses=num_buses,
-            city_center=(40.7128, -74.0060),
-            radius_km=radius_km,
+            map_width=float(map_width),
+            map_height=float(map_height),
+            custom_locations=custom_locs,
         )
         optimizer = BusRouteOptimization(use_rl=use_rl)
         results   = optimizer.optimize_routes(
@@ -105,7 +282,7 @@ if run_btn:
         )
         elapsed = time.time() - t0
 
-    total_fuel = optimizer.route_optimizer.estimate_fuel_consumption(results["total_distance"])
+    total_fuel    = optimizer.route_optimizer.estimate_fuel_consumption(results["total_distance"])
     session_count = engine.get_session_count() + 1
 
     score_data   = engine.compute_score(
@@ -119,12 +296,31 @@ if run_btn:
     engine.add_to_leaderboard(player_name, score_data, {
         "stops": num_stops, "buses": num_buses,
         "clustering": clustering_method, "routing": routing_method,
+        "map_style": map_style,
+        "challenge": challenge_on,
     }, achievements)
 
-    st.session_state.history.append({**score_data, "results": results,
-                                      "dataset": dataset, "achievements": achievements,
-                                      "elapsed": elapsed, "fuel": total_fuel})
-    st.success(f"✅ Done in {elapsed:.2f}s")
+    run_xp = sum(a["xp"] for a in achievements)
+    st.session_state.total_xp += run_xp
+    for a in achievements:
+        st.session_state.earned_ids.add(a["id"])
+    st.session_state.history.append({
+        **score_data,
+        "results":      results,
+        "dataset":      dataset,
+        "achievements": achievements,
+        "elapsed":      elapsed,
+        "fuel":         total_fuel,
+        "map_style":    map_style,
+        "map_width":    map_width,
+        "map_height":   map_height,
+        "clustering":   clustering_method,
+        "routing":      routing_method,
+        "xp":           run_xp,
+        "num_stops":    num_stops,
+        "challenge":    challenge_on,
+    })
+    st.success(f"✅ Done in {elapsed:.2f}s  |  +{run_xp} XP earned")
 
 # ── Display ───────────────────────────────────────────────────────────────────
 if not st.session_state.history:
@@ -155,12 +351,12 @@ with col_metrics:
     m3.metric("⛽ Fuel Used",      f"{latest['fuel']:.1f} L")
     m4.metric("🚌 Buses Used",     results["num_buses"])
 
-    # Score breakdown bar
+    # Score breakdown bar — each component is on 0-100 scale
     breakdown = {
-        "Distance": latest["dist_score"],
-        "Time":     latest["time_score"],
-        "Fuel":     latest["fuel_score"],
-        "Speed":    latest["speed_bonus"] * 10,
+        "Distance\n(40%)": latest["dist_score"],
+        "Time\n(30%)":     latest["time_score"],
+        "Fuel\n(20%)":     latest["fuel_score"],
+        "Speed\n(10%)":    min(100.0, latest["speed_bonus"] * 10),
     }
     fig_bar = go.Figure(go.Bar(
         x=list(breakdown.keys()),
@@ -172,8 +368,8 @@ with col_metrics:
     fig_bar.update_layout(
         margin=dict(t=10, b=0, l=0, r=0), height=160,
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        yaxis=dict(range=[0, 110], showgrid=False, visible=False),
-        xaxis=dict(color="#94a3b8"),
+        yaxis=dict(range=[0, 115], showgrid=False, visible=False),
+        xaxis=dict(color="#94a3b8", tickfont=dict(size=10)),
         font=dict(color="#94a3b8"),
         showlegend=False,
     )
@@ -192,93 +388,375 @@ if latest["achievements"]:
     st.divider()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_map, tab_routes, tab_stats, tab_board = st.tabs(["🗺️ Map", "📍 Routes", "📊 Charts", "🏆 Leaderboard"])
+tab_map, tab_routes, tab_stats, tab_board, tab_ach, tab_cmp = st.tabs([
+    "🗺️ Map", "📍 Routes", "📊 Charts", "🏆 Leaderboard", "🏅 Achievements", "⚖️ Compare",
+])
 
 # ── MAP TAB ───────────────────────────────────────────────────────────────────
 with tab_map:
-    try:
-        from streamlit_folium import st_folium
-        import folium
-
-        pickup_locs = dataset["pickup_locations"]
-        depot       = dataset["depot"]
-        dest        = dataset["destination"]
-        center_lat  = float(np.mean(pickup_locs[:, 0]))
-        center_lon  = float(np.mean(pickup_locs[:, 1]))
-
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=13)
-        COLORS = ["red","blue","green","purple","orange","darkred","cadetblue","darkgreen","darkblue","beige"]
-
-        for bus_idx, detail in enumerate(results["route_details"]):
-            color = COLORS[bus_idx % len(COLORS)]
-            route_pts = detail["waypoints"]
-            coords = [[float(p[0]), float(p[1])] for p in route_pts]
-            folium.PolyLine(coords, color=color, weight=3, opacity=0.8,
-                            tooltip=f"Bus {bus_idx+1} – {detail['distance']:.1f} km").add_to(m)
-            for stop_idx, pt_idx in enumerate(detail["route"]):
-                pt = pickup_locs[pt_idx]
-                folium.CircleMarker(
-                    location=[float(pt[0]), float(pt[1])], radius=7,
-                    popup=f"Bus {bus_idx+1} Stop {stop_idx+1}",
-                    color=color, fill=True, fill_color=color, fill_opacity=0.8,
-                ).add_to(m)
-
-        folium.Marker(depot.tolist(),  popup="🏠 Depot",       icon=folium.Icon(color="green",  icon="home")).add_to(m)
-        folium.Marker(dest.tolist(),   popup="🏫 Destination", icon=folium.Icon(color="purple", icon="flag")).add_to(m)
-        st_folium(m, use_container_width=True, height=500)
-    except Exception as e:
-        st.error(f"Map error: {e}")
+    fig_map = render_custom_map(
+        dataset, results,
+        style=latest.get("map_style", "Grid City"),
+    )
+    st.plotly_chart(fig_map, use_container_width=True)
 
 # ── ROUTES TAB ────────────────────────────────────────────────────────────────
 with tab_routes:
+    pickup_locs = dataset["pickup_locations"]
+    demands     = dataset["demands"]
+    tw          = dataset["time_windows"]
+    depot       = dataset["depot"]
+    dest        = dataset["destination"]
+
+    # ── Export buttons ────────────────────────────────────────────────────────
+    exp_col1, exp_col2, exp_col3 = st.columns([2, 2, 4])
+
+    # 1. All-routes CSV
+    all_rows = []
+    for bus_i, detail in enumerate(results["route_details"]):
+        for order, idx in enumerate(detail["route"]):
+            pt = pickup_locs[idx]
+            all_rows.append({
+                "Bus":        bus_i + 1,
+                "Stop":       order + 1,
+                "Pickup_ID":  idx,
+                "Latitude":   round(float(pt[0]), 6),
+                "Longitude":  round(float(pt[1]), 6),
+                "Demand":     int(demands[idx]),
+                "Window_Start_min": int(tw[idx, 0]),
+                "Window_End_min":   int(tw[idx, 1]),
+            })
+    csv_bytes = pd.DataFrame(all_rows).to_csv(index=False).encode()
+    exp_col1.download_button(
+        "📥 Download Routes CSV", data=csv_bytes,
+        file_name="optimised_routes.csv", mime="text/csv",
+    )
+
+    # 2. JSON report  (use existing ReportGenerator)
+    json_str = ReportGenerator.generate_json_report(results)
+    exp_col2.download_button(
+        "📥 Download JSON Report", data=json_str.encode(),
+        file_name="route_report.json", mime="application/json",
+    )
+
+    st.divider()
+    BUS_COLORS = ["#ef4444","#3b82f6","#22c55e","#a855f7","#f97316","#06b6d4"]
+
     for i, detail in enumerate(results["route_details"]):
-        with st.expander(f"🚌 Bus {i+1}  —  {detail['num_stops']} stops  •  {detail['distance']:.1f} km  •  {detail['time_minutes']:.0f} min"):
-            st.write(f"**Route order (pickup indices):** {detail['route']}")
-            st.write(f"**Fuel estimate:** {detail['fuel_liters']:.2f} L")
-            st.write(f"**Passenger load:** {detail['total_load']} pax")
+        color = BUS_COLORS[i % len(BUS_COLORS)]
+        header = (f"🚌 Bus {i+1}  —  {detail['num_stops']} stops  •  "
+                  f"{detail['distance']:.1f} km  •  {detail['time_minutes']:.0f} min  •  "
+                  f"{detail['fuel_liters']:.1f} L  •  {detail['total_load']} pax")
+        with st.expander(header, expanded=(i == 0)):
+            # Stop table
+            rows = []
+            for order, idx in enumerate(detail["route"]):
+                pt = pickup_locs[idx]
+                rows.append({
+                    "Stop #":    order + 1,
+                    "Pickup ID": idx,
+                    "Latitude":  round(float(pt[0]), 5),
+                    "Longitude": round(float(pt[1]), 5),
+                    "Demand":    int(demands[idx]),
+                    "Window Start (min)": int(tw[idx, 0]),
+                    "Window End (min)":   int(tw[idx, 1]),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            # Mini Plotly route map
+            route_pts = [depot.tolist()] + [pickup_locs[idx].tolist() for idx in detail["route"]] + [dest.tolist()]
+            rlat = [p[0] for p in route_pts]
+            rlon = [p[1] for p in route_pts]
+            fig_r = go.Figure()
+            fig_r.add_trace(go.Scattergeo(
+                lat=rlat, lon=rlon,
+                mode="lines+markers",
+                line=dict(color=color, width=2),
+                marker=dict(size=8, color=color),
+                name=f"Bus {i+1}",
+            ))
+            # Depot & destination
+            fig_r.add_trace(go.Scattergeo(
+                lat=[float(depot[0]), float(dest[0])],
+                lon=[float(depot[1]), float(dest[1])],
+                mode="markers+text",
+                marker=dict(size=14, color=["green","purple"], symbol="square"),
+                text=["Depot","Destination"], textposition="top center",
+                name="Key Points",
+            ))
+            fig_r.update_layout(
+                geo=dict(
+                    showland=True, landcolor="#1e293b",
+                    showocean=True, oceancolor="#0f172a",
+                    showcoastlines=True, coastlinecolor="#475569",
+                    projection_type="natural earth",
+                    fitbounds="locations",
+                ),
+                margin=dict(t=0, b=0, l=0, r=0), height=280,
+                paper_bgcolor="rgba(0,0,0,0)", showlegend=False,
+            )
+            st.plotly_chart(fig_r, use_container_width=True)
 
 # ── STATS TAB ─────────────────────────────────────────────────────────────────
 with tab_stats:
     bus_labels = [f"Bus {i+1}" for i in range(len(results["route_details"]))]
-    dists = [d["distance"] for d in results["route_details"]]
+    dists = [d["distance"]     for d in results["route_details"]]
     times = [d["time_minutes"] for d in results["route_details"]]
-    loads = [d["total_load"] for d in results["route_details"]]
+    loads = [d["total_load"]   for d in results["route_details"]]
 
-    c1, c2, c3 = st.columns(3)
     def _bar(title, labels, vals, color):
         fig = px.bar(x=labels, y=vals, title=title, color_discrete_sequence=[color])
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                          margin=dict(t=40,b=0,l=0,r=0), showlegend=False,
+                          margin=dict(t=40, b=0, l=0, r=0), showlegend=False,
                           font=dict(color="#94a3b8"), yaxis=dict(gridcolor="#1e293b"))
         return fig
+
+    c1, c2, c3 = st.columns(3)
     c1.plotly_chart(_bar("Distance (km)", bus_labels, dists, "#38bdf8"), use_container_width=True)
     c2.plotly_chart(_bar("Time (min)",    bus_labels, times, "#818cf8"), use_container_width=True)
     c3.plotly_chart(_bar("Passengers",    bus_labels, loads, "#34d399"), use_container_width=True)
 
-    # History line chart
+    st.divider()
+
+    # Score history line chart
     if len(st.session_state.history) > 1:
         hist_scores = [h["score"] for h in st.session_state.history]
-        fig_hist = px.line(y=hist_scores, markers=True, title="Score History",
-                           labels={"y":"Score","index":"Run #"},
-                           color_discrete_sequence=["#38bdf8"])
-        fig_hist.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                font=dict(color="#94a3b8"), yaxis=dict(range=[0,105],gridcolor="#1e293b"))
+        fig_hist = px.line(
+            y=hist_scores, markers=True, title="📈 Score History Across Runs",
+            labels={"y": "Score", "index": "Run #"},
+            color_discrete_sequence=["#38bdf8"],
+        )
+        fig_hist.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#94a3b8"), yaxis=dict(range=[0, 105], gridcolor="#1e293b"),
+            xaxis=dict(gridcolor="#1e293b"),
+        )
         st.plotly_chart(fig_hist, use_container_width=True)
+        st.divider()
+
+    # All-runs comparison table
+    if st.session_state.history:
+        st.subheader("📋 All Runs Comparison")
+        rows = []
+        for n, h in enumerate(st.session_state.history, 1):
+            rows.append({
+                "Run":        n,
+                "Map Style":  h.get("map_style", "—"),
+                "Stops":      h.get("num_stops", "—"),
+                "Clustering": h.get("clustering", "—"),
+                "Routing":    h.get("routing", "—"),
+                "Score":      f"{h['score']:.1f}",
+                "Stars":      "⭐" * h["stars"],
+                "Distance km":f"{h['results']['total_distance']:.1f}",
+                "Time min":   f"{h['results']['total_time']:.0f}",
+                "Fuel L":     f"{h['fuel']:.1f}",
+                "XP":         h.get("xp", 0),
+                "Elapsed s":  f"{h['elapsed']:.2f}",
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 # ── LEADERBOARD TAB ───────────────────────────────────────────────────────────
 with tab_board:
     board = engine.get_leaderboard(10)
+
+    lb_col, reset_col = st.columns([5, 1])
+    lb_col.subheader("🏆 All-Time Top 10")
+    if reset_col.button("🗑️ Reset", help="Clear the persistent leaderboard"):
+        engine.leaderboard = []
+        engine._save_leaderboard()
+        st.rerun()
+
     if not board:
-        st.info("No scores yet – run an optimisation!")
+        st.info("No scores yet – run an optimisation to get on the board!")
     else:
+        # Tabular leaderboard
+        lb_rows = []
         for rank, entry in enumerate(board, 1):
-            medal = ["🥇","🥈","🥉"][rank-1] if rank <= 3 else f"#{rank}"
-            with st.container():
-                cols = st.columns([1, 3, 2, 2, 4])
-                cols[0].markdown(f"**{medal}**")
-                cols[1].markdown(f"**{entry['player']}**")
-                cols[2].markdown(f"🎯 {entry['score']:.1f}")
-                cols[3].markdown("⭐" * entry["stars"])
-                cols[4].markdown(" ".join(entry["achievements"][:3]))
-            st.divider()
+            medal = ["🥇", "🥈", "🥉"][rank - 1] if rank <= 3 else f"#{rank}"
+            lb_rows.append({
+                "Rank":         medal,
+                "Player":       entry["player"],
+                "Score":        f"{entry['score']:.1f}",
+                "Stars":        "⭐" * entry["stars"],
+                "XP Earned":    entry.get("xp_earned", "—"),
+                "Map Style":    entry.get("config", {}).get("map_style", "—"),
+                "Routing":      entry.get("config", {}).get("routing", "—"),
+                "Achievements": " ".join(entry["achievements"][:2]),
+                "Date":         entry.get("timestamp", "—"),
+            })
+        st.dataframe(pd.DataFrame(lb_rows), use_container_width=True, hide_index=True)
+
+        # Score distribution chart
+        if len(board) > 2:
+            scores = [e["score"] for e in board]
+            players = [e["player"] for e in board]
+            fig_lb = px.bar(
+                x=players, y=scores, title="Score Distribution",
+                color=scores, color_continuous_scale="blues",
+                labels={"x": "Player", "y": "Score"},
+            )
+            fig_lb.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#94a3b8"), showlegend=False,
+                coloraxis_showscale=False, margin=dict(t=40, b=0, l=0, r=0),
+                yaxis=dict(range=[0, 105], gridcolor="#1e293b"),
+            )
+            st.plotly_chart(fig_lb, use_container_width=True)
+
+# ── ACHIEVEMENTS TAB ─────────────────────────────────────────────────────────
+with tab_ach:
+    st.subheader("🏅 Achievement Gallery")
+    earned_ids = st.session_state.earned_ids
+    all_ach    = engine.all_achievements()
+
+    total_possible_xp  = sum(a["xp"] for a in all_ach)
+    earned_xp          = sum(a["xp"] for a in all_ach if a["id"] in earned_ids)
+    pct = int(earned_xp / max(total_possible_xp, 1) * 100)
+
+    prog_col, info_col = st.columns([3, 1])
+    prog_col.progress(pct / 100, text=f"XP Progress: {earned_xp} / {total_possible_xp} ({pct}%)")
+    info_col.metric("Badges Earned", f"{len(earned_ids)} / {len(all_ach)}")
+    st.divider()
+
+    # Grid of badge cards — 3 columns
+    cols = st.columns(3)
+    for i, ach in enumerate(all_ach):
+        unlocked = ach["id"] in earned_ids
+        bg    = "#064e3b" if unlocked else "#1e293b"
+        fg    = "#6ee7b7" if unlocked else "#64748b"
+        lock  = ""        if unlocked else "🔒 "
+        with cols[i % 3]:
+            st.markdown(f"""
+            <div style="background:{bg};border-radius:10px;padding:14px;margin-bottom:10px;
+                        border:1px solid {'#065f46' if unlocked else '#334155'}">
+              <div style="font-size:1.4rem">{ach['name']}</div>
+              <div style="color:{fg};font-size:.8rem;margin-top:4px">{lock}{ach['desc']}</div>
+              <div style="color:#fbbf24;font-size:.8rem;margin-top:6px">✨ {ach['xp']} XP</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+# ── COMPARE TAB ──────────────────────────────────────────────────────────────
+with tab_cmp:
+    st.subheader("⚖️ Algorithm Comparison")
+    st.caption("Run NN, Hybrid, and DP on the **same dataset** and compare results side by side.")
+
+    cc1, cc2, cc3, cc4 = st.columns(4)
+    cmp_stops  = cc1.slider("Stops",  5, 30, 15, 5, key="cmp_stops")
+    cmp_buses  = cc2.slider("Buses",  1,  4,  2,    key="cmp_buses")
+    cmp_seed   = cc3.number_input("Seed", 0, 9999, 42, key="cmp_seed")
+    cmp_style  = cc4.selectbox("Map Style", MAP_STYLES, key="cmp_style")
+    cmp_btn    = st.button("⚖️ Run Comparison", type="primary", key="cmp_btn")
+
+    if cmp_btn:
+        gen = DataGenerator(seed=int(cmp_seed))
+        cmp_dataset = gen.generate_dataset(
+            num_pickup_points=cmp_stops,
+            num_buses=cmp_buses,
+            map_width=100.0,
+            map_height=100.0,
+        )
+        cmp_data = {}
+        methods = ["nn", "hybrid"]
+        if cmp_stops // max(cmp_buses, 1) <= 15:
+            methods.append("dp")   # DP is only practical for small clusters
+
+        with st.spinner("Running all algorithms…"):
+            for method in methods:
+                t0 = time.time()
+                opt = BusRouteOptimization(use_rl=False)
+                res = opt.optimize_routes(cmp_dataset, clustering_method="kmeans",
+                                          routing_method=method, visualize=False)
+                elapsed = time.time() - t0
+                fuel = opt.route_optimizer.estimate_fuel_consumption(res["total_distance"])
+                cmp_data[method] = {
+                    "distance": res["total_distance"],
+                    "time":     res["total_time"],
+                    "fuel":     fuel,
+                    "elapsed":  elapsed,
+                }
+        st.session_state.cmp_results = cmp_data
+        st.success("✅ Comparison complete!")
+
+    if st.session_state.cmp_results:
+        cmp_data = st.session_state.cmp_results
+        METHOD_LABELS = {"nn": "Nearest Neighbour", "hybrid": "Hybrid (NN+2-opt)", "dp": "DP (Exact)"}
+        METHOD_COLORS = {"nn": "#fbbf24", "hybrid": "#38bdf8", "dp": "#34d399"}
+
+        # Metric cards
+        metric_cols = st.columns(len(cmp_data))
+        for col, (method, vals) in zip(metric_cols, cmp_data.items()):
+            col.markdown(f"**{METHOD_LABELS.get(method, method)}**")
+            col.metric("🛣️ Distance", f"{vals['distance']:.1f} km")
+            col.metric("⏰ Time",     f"{vals['time']:.0f} min")
+            col.metric("⛽ Fuel",     f"{vals['fuel']:.1f} L")
+            col.metric("⏱ Wall-clock",f"{vals['elapsed']:.2f}s")
+        st.divider()
+
+        # Grouped bar chart
+        categories  = ["Distance (km)", "Time (min)", "Fuel (L)", "Speed (s×10)"]
+        fig_cmp = go.Figure()
+        for method, vals in cmp_data.items():
+            fig_cmp.add_trace(go.Bar(
+                name=METHOD_LABELS.get(method, method),
+                x=categories,
+                y=[vals["distance"], vals["time"], vals["fuel"], vals["elapsed"] * 10],
+                marker_color=METHOD_COLORS.get(method, "#94a3b8"),
+                text=[f"{v:.1f}" for v in [vals["distance"], vals["time"], vals["fuel"], vals["elapsed"]*10]],
+                textposition="outside",
+            ))
+        fig_cmp.update_layout(
+            barmode="group", title="Metric Comparison Across Algorithms",
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#94a3b8"), legend=dict(bgcolor="rgba(0,0,0,0)"),
+            yaxis=dict(gridcolor="#1e293b"), margin=dict(t=50, b=0, l=0, r=0),
+        )
+        st.plotly_chart(fig_cmp, use_container_width=True)
+
+        # Radar chart
+        radar_cats = ["Distance", "Time", "Fuel", "Speed"]
+        # Normalise each metric so the best=1.0, worst=0.0
+        def _norm(vals_list):
+            lo, hi = min(vals_list), max(vals_list)
+            if hi == lo:
+                return [1.0] * len(vals_list)
+            return [1.0 - (v - lo) / (hi - lo) for v in vals_list]
+
+        dist_n  = _norm([v["distance"] for v in cmp_data.values()])
+        time_n  = _norm([v["time"]     for v in cmp_data.values()])
+        fuel_n  = _norm([v["fuel"]     for v in cmp_data.values()])
+        speed_n = _norm([v["elapsed"]  for v in cmp_data.values()])
+
+        fig_radar = go.Figure()
+        for i, (method, vals) in enumerate(cmp_data.items()):
+            scores = [dist_n[i], time_n[i], fuel_n[i], speed_n[i]]
+            scores += [scores[0]]   # close the polygon
+            fig_radar.add_trace(go.Scatterpolar(
+                r=scores, theta=radar_cats + [radar_cats[0]],
+                fill="toself", name=METHOD_LABELS.get(method, method),
+                line=dict(color=METHOD_COLORS.get(method, "#94a3b8")),
+                opacity=0.6,
+            ))
+        fig_radar.update_layout(
+            polar=dict(
+                bgcolor="#1e293b",
+                radialaxis=dict(visible=True, range=[0, 1], gridcolor="#334155", color="#94a3b8"),
+                angularaxis=dict(color="#94a3b8"),
+            ),
+            showlegend=True, title="Normalised Performance Radar (higher = better)",
+            paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#94a3b8"),
+            legend=dict(bgcolor="rgba(0,0,0,0)"),
+            margin=dict(t=60, b=0, l=0, r=0), height=400,
+        )
+        st.plotly_chart(fig_radar, use_container_width=True)
+
+        # Show custom map for the last-run algorithm's routes
+        best_method = min(cmp_data, key=lambda m: cmp_data[m]["distance"])
+        st.caption(f"🗺️ Route map for best algorithm: **{METHOD_LABELS.get(best_method, best_method)}**")
+        opt_best = BusRouteOptimization(use_rl=False)
+        res_best = opt_best.optimize_routes(cmp_dataset, clustering_method="kmeans",
+                                            routing_method=best_method, visualize=False)
+        st.plotly_chart(
+            render_custom_map(cmp_dataset, res_best, style=cmp_style, height=420),
+            use_container_width=True,
+        )
 

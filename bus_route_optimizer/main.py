@@ -70,7 +70,15 @@ class BusRouteOptimization:
             )
         else:
             clustering_result = self.clustering.dbscan_clustering(pickup_locations)
-        
+            # DBSCAN can classify everything as noise (-1) for sparse data.
+            # Fall back to K-Means so the pipeline always produces valid routes.
+            if clustering_result['num_clusters'] == 0:
+                print("  ⚠ DBSCAN produced no clusters – falling back to K-Means")
+                clustering_result = self.clustering.kmeans_clustering(
+                    pickup_locations,
+                    num_buses=dataset['num_buses']
+                )
+
         num_clusters = clustering_result['num_clusters']
         print(f"  ✓ Created {num_clusters} clusters")
         
@@ -122,7 +130,7 @@ class BusRouteOptimization:
             print(f"  ✓ Cluster {cluster_id}: {len(point_indices)} stops, "
                   f"{distance:.1f} km, {time_minutes:.0f} min")
         
-        # Step 3: ReinformentLearning optimization (if enabled)
+        # Step 3: Reinforcement Learning optimization (if enabled)
         if self.use_rl:
             print("\n[3/4] REINFORCEMENT LEARNING OPTIMIZATION...")
             # Prepare data for RL
@@ -345,8 +353,8 @@ def main():
         num_pickup_points=30,
         num_buses=2,
         bus_capacity=50,
-        city_center=(40.7128, -74.0060),
-        radius_km=10.0
+        map_width=100.0,
+        map_height=100.0,
     )
     print(f"✓ Generated dataset with {dataset['num_pickup_points']} pickup points")
     
