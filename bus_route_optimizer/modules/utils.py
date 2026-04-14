@@ -95,8 +95,11 @@ class MetricsCalculator:
 
 def get_pixel_road_axes(map_width: float, map_height: float, rows: int = 96, cols: int = 96) -> Tuple[np.ndarray, np.ndarray]:
     """Return the row and column coordinates used for the pixel-map road grid."""
-    road_rows = np.array([int(rows * 0.25), int(rows * 0.55), int(rows * 0.8)], dtype=float)
-    road_cols = np.array([int(cols * 0.2), int(cols * 0.55), int(cols * 0.82)], dtype=float)
+    # Keep these fractions aligned with app.py so snapping and drawn lanes match.
+    row_fracs = (0.06, 0.14, 0.22, 0.30, 0.38, 0.46, 0.54, 0.62, 0.72, 0.82, 0.90)
+    col_fracs = (0.05, 0.13, 0.21, 0.29, 0.37, 0.45, 0.54, 0.63, 0.72, 0.82, 0.91)
+    road_rows = np.array([int(rows * frac) for frac in row_fracs], dtype=float)
+    road_cols = np.array([int(cols * frac) for frac in col_fracs], dtype=float)
     row_step = float(map_height) / max(rows - 1, 1)
     col_step = float(map_width) / max(cols - 1, 1)
     road_y = np.clip(road_rows * row_step, 0.0, float(map_height))

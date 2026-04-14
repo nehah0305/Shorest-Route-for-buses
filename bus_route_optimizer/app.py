@@ -106,13 +106,22 @@ def _build_pixel_tilemap(
         h = int(rng.integers(3, 8))
         tiles[y0:min(rows, y0 + h), x0:min(cols, x0 + w)] = 3
 
-    # Main roads (dense horizontal + vertical grid)
-    road_rows = [int(rows * frac) for frac in (0.10, 0.22, 0.34, 0.46, 0.58, 0.72, 0.86)]
-    road_cols = [int(cols * frac) for frac in (0.08, 0.20, 0.32, 0.44, 0.58, 0.72, 0.86)]
+    # Main roads (denser horizontal + vertical grid)
+    road_rows = [int(rows * frac) for frac in (0.06, 0.14, 0.22, 0.30, 0.38, 0.46, 0.54, 0.62, 0.72, 0.82, 0.90)]
+    road_cols = [int(cols * frac) for frac in (0.05, 0.13, 0.21, 0.29, 0.37, 0.45, 0.54, 0.63, 0.72, 0.82, 0.91)]
     for rr in road_rows:
         tiles[max(0, rr - 2):min(rows, rr + 2), :] = 2
     for cc in road_cols:
         tiles[:, max(0, cc - 2):min(cols, cc + 2)] = 2
+
+    # Branch connectors to add more route variety between main lanes.
+    for cc in road_cols[1:-1:2]:
+        y0 = int(rows * 0.10)
+        y1 = int(rows * 0.90)
+        if cc % 3 == 0:
+            y0, y1 = int(rows * 0.22), int(rows * 0.82)
+        tiles[max(0, y0 - 1):min(rows, y0 + 1), max(0, cc - 5):min(cols, cc + 6)] = 2
+        tiles[max(0, y1 - 1):min(rows, y1 + 1), max(0, cc - 5):min(cols, cc + 6)] = 2
 
     # River strip with slight wobble
     for y in range(rows):
@@ -888,6 +897,13 @@ with tab_cmp:
             map_width=100.0,
             map_height=100.0,
         )
+        cmp_dataset["pickup_locations"] = np.asarray([
+            snap_point_to_pixel_road(point, 100.0, 100.0)
+            for point in cmp_dataset["pickup_locations"]
+        ], dtype=float)
+        cmp_dataset["depot"] = snap_point_to_pixel_road(cmp_dataset["depot"], 100.0, 100.0)
+        cmp_dataset["destination"] = snap_point_to_pixel_road(cmp_dataset["destination"], 100.0, 100.0)
+        cmp_dataset["travel_mode"] = "road_grid"
         cmp_data = {}
         methods = ["nn", "hybrid"]
         if cmp_stops // max(cmp_buses, 1) <= 15:
