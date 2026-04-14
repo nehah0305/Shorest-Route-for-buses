@@ -29,29 +29,29 @@ class RouteOptimizer:
         depot: Optional[np.ndarray] = None
     ) -> np.ndarray:
         """
-        Calculate pairwise distances between all locations including depot.
-        
+        Calculate pairwise distances between all locations (vectorised).
+
         Args:
             locations: Array of shape (n, 2) with [lat, lon]
-            depot: Optional depot location
-        
+            depot: Optional depot location – if supplied it is NOT prepended;
+                   the caller is responsible for managing index offsets.
+
         Returns:
-            Distance matrix of shape (n+1, n+1) or (n, n)
+            Distance matrix of shape (n, n)
         """
-        if depot is not None:
-            locations = np.vstack([depot, locations])
-        
         n = len(locations)
-        dist_matrix = np.zeros((n, n))
-        
-        for i in range(n):
-            for j in range(n):
-                if i != j:
-                    dist_matrix[i, j] = self.haversine_distance(
-                        locations[i][0], locations[i][1],
-                        locations[j][0], locations[j][1]
-                    )
-        
+        lat = np.radians(locations[:, 0])
+        lon = np.radians(locations[:, 1])
+
+        # Vectorised Haversine via broadcasting
+        dlat = lat[:, None] - lat[None, :]   # (n, n)
+        dlon = lon[:, None] - lon[None, :]
+        a = np.sin(dlat / 2) ** 2 + (
+            np.cos(lat[:, None]) * np.cos(lat[None, :]) * np.sin(dlon / 2) ** 2
+        )
+        dist_matrix = 6371.0 * 2 * np.arcsin(np.sqrt(a))
+        np.fill_diagonal(dist_matrix, 0.0)
+
         self.distance_matrix = dist_matrix
         return dist_matrix
     
@@ -281,40 +281,62 @@ class RouteOptimizer:
         method: str = 'hybrid'
     ) -> Dict:
         """
-        Solve TSP with depot and optional final destination.
-        
+        Solve TSP for pickup locations, starting and ending at depot.
+
+        The distance matrix is built from pickup_locations only so that
+        route indices map 1-to-1 to pickup_locations rows (no off-by-one).
+        The depot→first-stop and last-stop→destination legs are appended
+        to the total distance afterwards.
+
         Args:
             pickup_locations: Array of shape (n, 2) with [lat, lon]
             depot: Starting location
-            destination: Optional different destination (if None, returns to depot)
-            method: 'nn' (nearest neighbor), 'dp' (dynamic programming), 'hybrid'
-        
+            destination: Final destination (defaults to depot)
+            method: 'nn', 'dp', or 'hybrid'
+
         Returns:
-            Dictionary containing:
-                - route: Optimized route (indices in pickup locations)
-                - distance: Total distance in km
-                - waypoints: Full route with depot added
+            Dict with keys: route, distance, waypoints, num_stops
         """
-        self.calculate_distance_matrix(pickup_locations, depot)
-        
         if destination is None:
             destination = depot
-        
+
+        if len(pickup_locations) == 0:
+            return {'route': [], 'distance': 0.0, 'waypoints': [depot, destination], 'num_stops': 0}
+
+        # Build distance matrix for pickup points only (correct indices)
+        self.calculate_distance_matrix(pickup_locations)
+
         if method == 'nn':
-            route, distance = self.nearest_neighbor(pickup_locations, 0)
+            route, inner_distance = self.nearest_neighbor(pickup_locations, 0)
         elif method == 'dp':
-            route, distance = self.dynamic_programming_tsp(pickup_locations)
+            route, inner_distance = self.dynamic_programming_tsp(pickup_locations)
         elif method == 'hybrid':
-            route, distance = self.hybrid_optimization(pickup_locations, 0)
+            route, inner_distance = self.hybrid_optimization(pickup_locations, 0)
         else:
             raise ValueError(f"Unknown method: {method}")
-        
-        # Add depot to waypoints
-        waypoints = [depot] + pickup_locations[route[:-1]] + [destination]
-        
+
+        # The NN/DP routes include a return-to-start leg; remove it for an
+        # open path (depot → pickups → destination).
+        visit_order = route[:-1]  # drop the closing "return to 0" index
+
+        # Add depot→first and last→destination distances
+        first_stop = pickup_locations[visit_order[0]]
+        last_stop  = pickup_locations[visit_order[-1]]
+        depot_to_first = self.haversine_distance(
+            depot[0], depot[1], first_stop[0], first_stop[1]
+        )
+        last_to_dest = self.haversine_distance(
+            last_stop[0], last_stop[1], destination[0], destination[1]
+        )
+        # Remove the artificial return-to-start leg that NN added
+        return_leg = self.distance_matrix[visit_order[-1], visit_order[0]]
+        total_distance = inner_distance - return_leg + depot_to_first + last_to_dest
+
+        waypoints = [depot] + [pickup_locations[i] for i in visit_order] + [destination]
+
         return {
-            'route': route,
-            'distance': distance,
+            'route': visit_order,
+            'distance': float(total_distance),
             'waypoints': waypoints,
             'num_stops': len(pickup_locations)
         }

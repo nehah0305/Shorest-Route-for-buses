@@ -5,6 +5,7 @@ This module orchestrates clustering, route optimization, and reinforcement learn
 to provide end-to-end bus route optimization with dynamic improvements.
 """
 
+import os
 import numpy as np
 from typing import Dict, List, Optional
 import time
@@ -94,7 +95,7 @@ class BusRouteOptimization:
                 method=routing_method
             )
             
-            # Map back to original indices
+            # result['route'] already uses pickup_locations indices (0-based within cluster)
             original_route = [point_indices[i] for i in result['route']]
             
             # Calculate additional metrics
@@ -145,6 +146,7 @@ class BusRouteOptimization:
         
         # Step 4: Visualization
         if visualize:
+            os.makedirs("visualizations", exist_ok=True)
             print("\n[4/4] GENERATING VISUALIZATIONS...")
             self._create_visualizations(
                 pickup_locations,

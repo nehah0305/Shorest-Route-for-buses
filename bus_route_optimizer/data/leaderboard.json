@@ -1,0 +1,21 @@
+[
+  {
+    "player": "Optimizer",
+    "score": 86.4,
+    "stars": 4,
+    "xp_earned": 345,
+    "achievements": [
+      "\ud83d\ude8c First Run",
+      "\u26a1 Speed Demon",
+      "\ud83c\udfaf Efficiency Ace",
+      "\ud83e\uddb8 Hybrid Hero"
+    ],
+    "config": {
+      "stops": 30,
+      "buses": 2,
+      "clustering": "kmeans",
+      "routing": "hybrid"
+    },
+    "timestamp": "2026-04-14 12:19"
+  }
+]
