@@ -13,6 +13,25 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
+def _orthogonal_polyline(points: List[np.ndarray]) -> List[np.ndarray]:
+    """Insert corners so each segment moves horizontally or vertically."""
+    if not points:
+        return []
+
+    polyline = [np.array(points[0], dtype=float)]
+    for start, end in zip(points, points[1:]):
+        start = np.array(start, dtype=float)
+        end = np.array(end, dtype=float)
+        if np.allclose(start, end):
+            continue
+        corner = np.array([end[0], start[1]], dtype=float)
+        if not np.allclose(polyline[-1], corner):
+            polyline.append(corner)
+        if not np.allclose(polyline[-1], end):
+            polyline.append(end)
+    return polyline
+
+
 class RouteVisualizer:
     """Visualize bus routes and clusters on maps."""
     
@@ -131,11 +150,10 @@ class RouteVisualizer:
         )
 
         # Plot route path
-        route_path = [depot] + pickup_locations[route[:-1]].tolist() + [destination]
+        route_path = _orthogonal_polyline([depot] + pickup_locations[route[:-1]].tolist() + [destination])
         for i in range(len(route_path) - 1):
             start = route_path[i]
             end = route_path[i + 1]
-            dx, dy = end[0] - start[0], end[1] - start[1]
             ax.annotate("", xy=(end[0], end[1]), xytext=(start[0], start[1]),
                         arrowprops=dict(arrowstyle="->", color="red", lw=1.5))
 
@@ -213,7 +231,7 @@ class RouteVisualizer:
         # Plot each route
         for route_id, route in enumerate(routes):
             color = colors[route_id]
-            route_path = [depot] + pickup_locations[route[:-1]].tolist() + [destination]
+            route_path = _orthogonal_polyline([depot] + pickup_locations[route[:-1]].tolist() + [destination])
 
             # Plot path
             for i in range(len(route_path) - 1):

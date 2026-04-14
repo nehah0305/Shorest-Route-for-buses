@@ -13,6 +13,8 @@ from typing import List, Tuple, Dict, Optional
 import heapq
 from itertools import permutations
 
+from modules.utils import build_pixel_road_path, snap_point_to_pixel_road
+
 
 class RouteOptimizer:
     """Optimize routes within clusters using various algorithms."""
@@ -27,19 +29,24 @@ class RouteOptimizer:
         self,
         locations: np.ndarray,
         depot: Optional[np.ndarray] = None,
+        metric: str = "euclidean",
     ) -> np.ndarray:
         """
-        Calculate pairwise Euclidean distances between all locations (vectorised).
+        Calculate pairwise distances between all locations (vectorised).
 
         Args:
             locations: Array of shape (n, 2) with [x, y] in abstract map units.
             depot:     Ignored (kept for API compatibility).
+            metric:    "euclidean" or "manhattan".
 
         Returns:
             Distance matrix of shape (n, n).
         """
         diff = locations[:, None, :] - locations[None, :, :]   # (n, n, 2)
-        dist_matrix = np.sqrt((diff ** 2).sum(axis=2))
+        if metric == "manhattan":
+            dist_matrix = np.abs(diff).sum(axis=2)
+        else:
+            dist_matrix = np.sqrt((diff ** 2).sum(axis=2))
         np.fill_diagonal(dist_matrix, 0.0)
         self.distance_matrix = dist_matrix
         return dist_matrix
@@ -257,7 +264,12 @@ class RouteOptimizer:
         pickup_locations: np.ndarray,
         depot: np.ndarray,
         destination: Optional[np.ndarray] = None,
-        method: str = 'hybrid'
+        method: str = 'hybrid',
+        travel_mode: str = 'euclidean',
+        map_width: Optional[float] = None,
+        map_height: Optional[float] = None,
+        road_rows: int = 96,
+        road_cols: int = 96,
     ) -> Dict:
         """
         Solve TSP for pickup locations, starting and ending at depot.
@@ -272,6 +284,9 @@ class RouteOptimizer:
             depot: Starting location
             destination: Final destination (defaults to depot)
             method: 'nn', 'dp', or 'hybrid'
+            travel_mode: 'euclidean' or 'road_grid'
+            map_width/map_height: Required for road-grid snapping
+            road_rows/road_cols: Road grid resolution used by Pixel Adventure
 
         Returns:
             Dict with keys: route, distance, waypoints, num_stops
@@ -282,8 +297,20 @@ class RouteOptimizer:
         if len(pickup_locations) == 0:
             return {'route': [], 'distance': 0.0, 'waypoints': [depot, destination], 'num_stops': 0}
 
+        road_mode = travel_mode == 'road_grid' and map_width is not None and map_height is not None
+        if road_mode:
+            pickup_locations = np.asarray([
+                snap_point_to_pixel_road(point, map_width, map_height, rows=road_rows, cols=road_cols)
+                for point in pickup_locations
+            ], dtype=float)
+            depot = snap_point_to_pixel_road(depot, map_width, map_height, rows=road_rows, cols=road_cols)
+            destination = snap_point_to_pixel_road(destination, map_width, map_height, rows=road_rows, cols=road_cols)
+
         # Build distance matrix for pickup points only (correct indices)
-        self.calculate_distance_matrix(pickup_locations)
+        self.calculate_distance_matrix(
+            pickup_locations,
+            metric='manhattan' if road_mode else 'euclidean'
+        )
 
         if method == 'nn':
             route, inner_distance = self.nearest_neighbor(pickup_locations, 0)
@@ -298,20 +325,29 @@ class RouteOptimizer:
         # open path (depot → pickups → destination).
         visit_order = route[:-1]  # drop the closing "return to 0" index
 
-        # Add depot→first and last→destination distances
-        first_stop = pickup_locations[visit_order[0]]
-        last_stop  = pickup_locations[visit_order[-1]]
-        depot_to_first = self.euclidean_distance(
-            depot[0], depot[1], first_stop[0], first_stop[1]
-        )
-        last_to_dest = self.euclidean_distance(
-            last_stop[0], last_stop[1], destination[0], destination[1]
-        )
-        # Remove the artificial return-to-start leg that NN added
-        return_leg = self.distance_matrix[visit_order[-1], visit_order[0]]
-        total_distance = inner_distance - return_leg + depot_to_first + last_to_dest
-
-        waypoints = [depot] + [pickup_locations[i] for i in visit_order] + [destination]
+        route_points = [depot] + [pickup_locations[i] for i in visit_order] + [destination]
+        if road_mode:
+            waypoints = build_pixel_road_path(route_points, map_width, map_height, rows=road_rows, cols=road_cols)
+            total_distance = float(
+                sum(
+                    self.euclidean_distance(start[0], start[1], end[0], end[1])
+                    for start, end in zip(waypoints, waypoints[1:])
+                )
+            )
+        else:
+            # Add depot→first and last→destination distances
+            first_stop = pickup_locations[visit_order[0]]
+            last_stop  = pickup_locations[visit_order[-1]]
+            depot_to_first = self.euclidean_distance(
+                depot[0], depot[1], first_stop[0], first_stop[1]
+            )
+            last_to_dest = self.euclidean_distance(
+                last_stop[0], last_stop[1], destination[0], destination[1]
+            )
+            # Remove the artificial return-to-start leg that NN added
+            return_leg = self.distance_matrix[visit_order[-1], visit_order[0]]
+            total_distance = inner_distance - return_leg + depot_to_first + last_to_dest
+            waypoints = route_points
 
         return {
             'route': visit_order,

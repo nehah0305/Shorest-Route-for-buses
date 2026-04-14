@@ -16,7 +16,7 @@ import plotly.express as px
 sys.path.insert(0, os.path.dirname(__file__))
 
 from modules.gamification import GamificationEngine
-from modules.utils import ReportGenerator
+from modules.utils import ReportGenerator, snap_point_to_pixel_road
 from main import BusRouteOptimization
 from modules.data_generator import DataGenerator
 
@@ -47,7 +47,7 @@ ALGO_INFO = {
     "dp":     ("Dynamic Programming", "Held-Karp exact algorithm (optimal). Exponential cost; only runs when ≤15 stops per cluster."),
 }
 
-MAP_STYLES = ["Grid City", "District Zones", "Open Field", "Pixel Adventure"]
+MAP_STYLE = "Pixel Adventure"
 
 BUS_PALETTE = ["#ef4444", "#3b82f6", "#22c55e", "#a855f7", "#f97316", "#06b6d4"]
 
@@ -87,8 +87,8 @@ def _build_pixel_tilemap(
     map_width: float,
     map_height: float,
     seed: int,
-    cols: int = 72,
-    rows: int = 48,
+    cols: int = 96,
+    rows: int = 96,
 ) -> np.ndarray:
     """Create a deterministic pixel-art map inspired by retro RPG tiles."""
     rng = np.random.default_rng(seed)
@@ -106,13 +106,13 @@ def _build_pixel_tilemap(
         h = int(rng.integers(3, 8))
         tiles[y0:min(rows, y0 + h), x0:min(cols, x0 + w)] = 3
 
-    # Main roads (horizontal + vertical)
-    road_rows = [int(rows * 0.25), int(rows * 0.55), int(rows * 0.8)]
-    road_cols = [int(cols * 0.2), int(cols * 0.55), int(cols * 0.82)]
+    # Main roads (dense horizontal + vertical grid)
+    road_rows = [int(rows * frac) for frac in (0.10, 0.22, 0.34, 0.46, 0.58, 0.72, 0.86)]
+    road_cols = [int(cols * frac) for frac in (0.08, 0.20, 0.32, 0.44, 0.58, 0.72, 0.86)]
     for rr in road_rows:
-        tiles[max(0, rr - 1):min(rows, rr + 1), :] = 2
+        tiles[max(0, rr - 2):min(rows, rr + 2), :] = 2
     for cc in road_cols:
-        tiles[:, max(0, cc - 1):min(cols, cc + 1)] = 2
+        tiles[:, max(0, cc - 2):min(cols, cc + 2)] = 2
 
     # River strip with slight wobble
     for y in range(rows):
@@ -129,6 +129,10 @@ def _build_pixel_tilemap(
     tiles[rows - safe_margin_y:rows, cols - safe_margin_x:cols] = 2
 
     return tiles
+
+
+def _use_pixel_roads(style: str) -> bool:
+    return True
 
 
 def _polyline_point(points: List[np.ndarray], progress: float) -> Tuple[float, float]:
@@ -165,7 +169,7 @@ def _polyline_point(points: List[np.ndarray], progress: float) -> Tuple[float, f
 def render_custom_map(
     dataset: dict,
     results: dict,
-    style: str = "Grid City",
+    style: str = "Pixel Adventure",
     height: int = 560,
     animate_buses: bool = False,
     animation_steps: int = 70,
@@ -183,7 +187,7 @@ def render_custom_map(
     mh          = float(dataset.get("map_height", 100))
 
     fig = go.Figure()
-    is_pixel = style == "Pixel Adventure"
+    is_pixel = _use_pixel_roads(style)
 
     # ── Background & style ───────────────────────────────────────────────────
     if is_pixel:
@@ -248,8 +252,9 @@ def render_custom_map(
     # ── Stop markers (per bus, numbered) ────────────────────────────────────
     for bus_i, detail in enumerate(results["route_details"]):
         color = BUS_PALETTE[bus_i % len(BUS_PALETTE)]
+        stop_points = [snap_point_to_pixel_road(pickup_locs[idx], mw, mh) for idx in detail["route"]]
         for stop_i, idx in enumerate(detail["route"]):
-            pt = pickup_locs[idx]
+            pt = stop_points[stop_i] if stop_i < len(stop_points) else pickup_locs[idx]
             fig.add_trace(go.Scatter(
                 x=[float(pt[0])], y=[float(pt[1])],
                 mode="markers+text",
@@ -381,7 +386,8 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🗺️ Map Settings")
-    map_style  = st.selectbox("Map Style", MAP_STYLES)
+    map_style  = MAP_STYLE
+    st.caption("Map style locked to Pixel Adventure.")
     map_width  = st.slider("Map Width  (units)", 50, 200, 100, 10)
     map_height = st.slider("Map Height (units)", 50, 200, 100, 10)
 
@@ -466,6 +472,15 @@ if run_btn:
             map_height=float(map_height),
             custom_locations=custom_locs,
         )
+        map_w = float(map_width)
+        map_h = float(map_height)
+        dataset["pickup_locations"] = np.asarray([
+            snap_point_to_pixel_road(point, map_w, map_h)
+            for point in dataset["pickup_locations"]
+        ], dtype=float)
+        dataset["depot"] = snap_point_to_pixel_road(dataset["depot"], map_w, map_h)
+        dataset["destination"] = snap_point_to_pixel_road(dataset["destination"], map_w, map_h)
+        dataset["travel_mode"] = "road_grid"
         optimizer = BusRouteOptimization(use_rl=use_rl)
         results   = optimizer.optimize_routes(
             dataset,
@@ -587,14 +602,8 @@ tab_map, tab_routes, tab_stats, tab_board, tab_ach, tab_cmp = st.tabs([
 
 # ── MAP TAB ───────────────────────────────────────────────────────────────────
 with tab_map:
-    style_col, anim_col1, anim_col2 = st.columns([2, 2, 3])
-    display_style = style_col.selectbox(
-        "Map view style",
-        MAP_STYLES,
-        index=MAP_STYLES.index(latest.get("map_style", "Grid City")) if latest.get("map_style", "Grid City") in MAP_STYLES else 0,
-        key="display_map_style",
-        help="Change map appearance here without re-running optimization.",
-    )
+    anim_col1, anim_col2 = st.columns([2, 3])
+    display_style = MAP_STYLE
     animate_buses = anim_col1.toggle("Animate bus movement", value=True)
     animation_steps = anim_col2.slider(
         "Animation smoothness",
@@ -678,7 +687,7 @@ with tab_routes:
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
             # Mini custom-map route plot (no real-world geo projection)
-            route_pts = [depot.tolist()] + [pickup_locs[idx].tolist() for idx in detail["route"]] + [dest.tolist()]
+            route_pts = [np.array(pt, dtype=float) for pt in detail["waypoints"]]
             rx = [p[0] for p in route_pts]
             ry = [p[1] for p in route_pts]
             fig_r = go.Figure()
@@ -865,11 +874,10 @@ with tab_cmp:
     st.subheader("⚖️ Algorithm Comparison")
     st.caption("Run NN, Hybrid, and DP on the **same dataset** and compare results side by side.")
 
-    cc1, cc2, cc3, cc4 = st.columns(4)
+    cc1, cc2, cc3 = st.columns(3)
     cmp_stops  = cc1.slider("Stops",  5, 30, 15, 5, key="cmp_stops")
     cmp_buses  = cc2.slider("Buses",  1,  4,  2,    key="cmp_buses")
     cmp_seed   = cc3.number_input("Seed", 0, 9999, 42, key="cmp_seed")
-    cmp_style  = cc4.selectbox("Map Style", MAP_STYLES, key="cmp_style")
     cmp_btn    = st.button("⚖️ Run Comparison", type="primary", key="cmp_btn")
 
     if cmp_btn:
@@ -981,7 +989,7 @@ with tab_cmp:
         res_best = opt_best.optimize_routes(cmp_dataset, clustering_method="kmeans",
                                             routing_method=best_method, visualize=False)
         st.plotly_chart(
-            render_custom_map(cmp_dataset, res_best, style=cmp_style, height=420),
+            render_custom_map(cmp_dataset, res_best, style=MAP_STYLE, height=420),
             use_container_width=True,
         )
 

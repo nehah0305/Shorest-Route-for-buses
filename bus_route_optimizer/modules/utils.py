@@ -93,6 +93,58 @@ class MetricsCalculator:
         return efficiency
 
 
+def get_pixel_road_axes(map_width: float, map_height: float, rows: int = 96, cols: int = 96) -> Tuple[np.ndarray, np.ndarray]:
+    """Return the row and column coordinates used for the pixel-map road grid."""
+    road_rows = np.array([int(rows * 0.25), int(rows * 0.55), int(rows * 0.8)], dtype=float)
+    road_cols = np.array([int(cols * 0.2), int(cols * 0.55), int(cols * 0.82)], dtype=float)
+    row_step = float(map_height) / max(rows - 1, 1)
+    col_step = float(map_width) / max(cols - 1, 1)
+    road_y = np.clip(road_rows * row_step, 0.0, float(map_height))
+    road_x = np.clip(road_cols * col_step, 0.0, float(map_width))
+    return road_y, road_x
+
+
+def snap_point_to_pixel_road(
+    point: np.ndarray,
+    map_width: float,
+    map_height: float,
+    rows: int = 96,
+    cols: int = 96,
+) -> np.ndarray:
+    """Snap a point to the nearest pixel-road intersection."""
+    road_y, road_x = get_pixel_road_axes(map_width, map_height, rows=rows, cols=cols)
+    snapped = np.array(point, dtype=float).copy()
+    snapped[0] = road_x[np.argmin(np.abs(road_x - snapped[0]))]
+    snapped[1] = road_y[np.argmin(np.abs(road_y - snapped[1]))]
+    return snapped
+
+
+def build_pixel_road_path(
+    points: List[np.ndarray],
+    map_width: float,
+    map_height: float,
+    rows: int = 96,
+    cols: int = 96,
+) -> List[np.ndarray]:
+    """Build an orthogonal path that stays on the pixel-map brown roads."""
+    if not points:
+        return []
+
+    snapped_points = [snap_point_to_pixel_road(point, map_width, map_height, rows=rows, cols=cols) for point in points]
+    path: List[np.ndarray] = [snapped_points[0]]
+
+    for start, end in zip(snapped_points, snapped_points[1:]):
+        if np.allclose(start, end):
+            continue
+        corner = np.array([end[0], start[1]], dtype=float)
+        if not np.allclose(path[-1], corner):
+            path.append(corner)
+        if not np.allclose(path[-1], end):
+            path.append(end)
+
+    return path
+
+
 class ReportGenerator:
     """Generate reports and summaries."""
     

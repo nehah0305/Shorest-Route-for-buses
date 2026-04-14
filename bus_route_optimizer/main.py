@@ -100,7 +100,10 @@ class BusRouteOptimization:
                 cluster_points,
                 dataset['depot'],
                 dataset['destination'],
-                method=routing_method
+                method=routing_method,
+                travel_mode=dataset.get('travel_mode', 'euclidean'),
+                map_width=dataset.get('map_width'),
+                map_height=dataset.get('map_height'),
             )
             
             # result['route'] already uses pickup_locations indices (0-based within cluster)
