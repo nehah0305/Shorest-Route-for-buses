@@ -5,6 +5,7 @@ Run with:  streamlit run app.py   (from inside bus_route_optimizer/)
 
 import os, sys, time
 from datetime import date
+from typing import List, Tuple
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -46,7 +47,7 @@ ALGO_INFO = {
     "dp":     ("Dynamic Programming", "Held-Karp exact algorithm (optimal). Exponential cost; only runs when ≤15 stops per cluster."),
 }
 
-MAP_STYLES = ["Grid City", "District Zones", "Open Field"]
+MAP_STYLES = ["Grid City", "District Zones", "Open Field", "Pixel Adventure"]
 
 BUS_PALETTE = ["#ef4444", "#3b82f6", "#22c55e", "#a855f7", "#f97316", "#06b6d4"]
 
@@ -66,11 +67,109 @@ engine: GamificationEngine = st.session_state.gamification
 
 
 # ── Custom map renderer ───────────────────────────────────────────────────────
+def _pixel_colorscale() -> list:
+    """Discrete colors for pixel-art tile classes."""
+    stops = [
+        (0 / 4, "#9ed85f"),  # grass
+        (1 / 4, "#42b8cf"),  # water
+        (2 / 4, "#d3b34e"),  # path
+        (3 / 4, "#2f8c54"),  # forest
+        (4 / 4, "#d7ec9f"),  # meadow highlight
+    ]
+    scale = []
+    for value, color in stops:
+        scale.append([value, color])
+        scale.append([value, color])
+    return scale
+
+
+def _build_pixel_tilemap(
+    map_width: float,
+    map_height: float,
+    seed: int,
+    cols: int = 72,
+    rows: int = 48,
+) -> np.ndarray:
+    """Create a deterministic pixel-art map inspired by retro RPG tiles."""
+    rng = np.random.default_rng(seed)
+    tiles = np.zeros((rows, cols), dtype=np.int8)  # 0 -> grass
+
+    # Meadow highlights
+    meadow_noise = rng.random((rows, cols))
+    tiles[meadow_noise < 0.05] = 4
+
+    # Forest blocks
+    for _ in range(16):
+        x0 = int(rng.integers(0, max(cols - 8, 1)))
+        y0 = int(rng.integers(0, max(rows - 8, 1)))
+        w = int(rng.integers(4, 10))
+        h = int(rng.integers(3, 8))
+        tiles[y0:min(rows, y0 + h), x0:min(cols, x0 + w)] = 3
+
+    # Main roads (horizontal + vertical)
+    road_rows = [int(rows * 0.25), int(rows * 0.55), int(rows * 0.8)]
+    road_cols = [int(cols * 0.2), int(cols * 0.55), int(cols * 0.82)]
+    for rr in road_rows:
+        tiles[max(0, rr - 1):min(rows, rr + 1), :] = 2
+    for cc in road_cols:
+        tiles[:, max(0, cc - 1):min(cols, cc + 1)] = 2
+
+    # River strip with slight wobble
+    for y in range(rows):
+        center = int(cols * 0.35 + 3 * np.sin(y / 4.0))
+        half = 2 + (y % 3 == 0)
+        x0 = max(0, center - half)
+        x1 = min(cols, center + half)
+        tiles[y, x0:x1] = 1
+
+    # Keep start and end corners path-friendly
+    safe_margin_x = max(2, int(cols * 0.08))
+    safe_margin_y = max(2, int(rows * 0.08))
+    tiles[0:safe_margin_y, 0:safe_margin_x] = 2
+    tiles[rows - safe_margin_y:rows, cols - safe_margin_x:cols] = 2
+
+    return tiles
+
+
+def _polyline_point(points: List[np.ndarray], progress: float) -> Tuple[float, float]:
+    """Get interpolated x/y position at progress in [0, 1] along a polyline."""
+    if not points:
+        return 0.0, 0.0
+    if len(points) == 1:
+        return float(points[0][0]), float(points[0][1])
+
+    progress = float(np.clip(progress, 0.0, 1.0))
+    segment_lengths = []
+    for i in range(len(points) - 1):
+        p0, p1 = points[i], points[i + 1]
+        segment_lengths.append(float(np.linalg.norm(p1 - p0)))
+    total = sum(segment_lengths)
+    if total <= 1e-9:
+        last = points[-1]
+        return float(last[0]), float(last[1])
+
+    target = total * progress
+    walked = 0.0
+    for i, seg_len in enumerate(segment_lengths):
+        if walked + seg_len >= target:
+            ratio = (target - walked) / max(seg_len, 1e-9)
+            p0, p1 = points[i], points[i + 1]
+            xy = p0 + ratio * (p1 - p0)
+            return float(xy[0]), float(xy[1])
+        walked += seg_len
+
+    last = points[-1]
+    return float(last[0]), float(last[1])
+
+
 def render_custom_map(
     dataset: dict,
     results: dict,
     style: str = "Grid City",
     height: int = 560,
+    animate_buses: bool = False,
+    animation_steps: int = 70,
+    animation_seconds: int = 14,
 ) -> go.Figure:
     """
     Render a styled 2-D custom map of all bus routes using Plotly.
@@ -84,10 +183,31 @@ def render_custom_map(
     mh          = float(dataset.get("map_height", 100))
 
     fig = go.Figure()
+    is_pixel = style == "Pixel Adventure"
 
     # ── Background & style ───────────────────────────────────────────────────
-    fig.add_shape(type="rect", x0=0, y0=0, x1=mw, y1=mh,
-                  fillcolor="#0f172a", line=dict(color="#334155", width=1))
+    if is_pixel:
+        tile_seed = int(dataset.get("num_pickup_points", 0) + dataset.get("num_buses", 0) * 97)
+        tiles = _build_pixel_tilemap(mw, mh, tile_seed)
+        rows, cols = tiles.shape
+        fig.add_trace(go.Heatmap(
+            z=tiles,
+            x0=0,
+            dx=mw / cols,
+            y0=0,
+            dy=mh / rows,
+            colorscale=_pixel_colorscale(),
+            zmin=0,
+            zmax=4,
+            showscale=False,
+            opacity=0.96,
+            zsmooth=False,
+            hoverinfo="skip",
+            name="Pixel Terrain",
+        ))
+    else:
+        fig.add_shape(type="rect", x0=0, y0=0, x1=mw, y1=mh,
+                      fillcolor="#0f172a", line=dict(color="#334155", width=1))
 
     if style == "Grid City":
         step = max(mw, mh) / 10
@@ -120,7 +240,7 @@ def render_custom_map(
         ys    = [float(p[1]) for p in wpts]
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="lines",
-            line=dict(color=color, width=2.5),
+            line=dict(color=color, width=3 if is_pixel else 2.5),
             name=f"🚌 Bus {bus_i+1}",
             hoverinfo="skip",
         ))
@@ -162,21 +282,94 @@ def render_custom_map(
         name="Destination", hovertext="Destination", hoverinfo="text",
     ))
 
+    # ── Animated bus movement ────────────────────────────────────────────────
+    bus_trace_indices = []
+    if animate_buses and results["route_details"]:
+        for bus_i, detail in enumerate(results["route_details"]):
+            color = BUS_PALETTE[bus_i % len(BUS_PALETTE)]
+            points = [np.array(p, dtype=float) for p in detail["waypoints"]]
+            x0, y0 = _polyline_point(points, 0.0)
+            fig.add_trace(go.Scatter(
+                x=[x0],
+                y=[y0],
+                mode="markers",
+                marker=dict(size=15, color=color, symbol="square", line=dict(color="white", width=1.5)),
+                name=f"Bus {bus_i+1} (Live)",
+                hovertext=f"Bus {bus_i+1}",
+                hoverinfo="text",
+            ))
+            bus_trace_indices.append(len(fig.data) - 1)
+
+        frames = []
+        total_steps = max(20, int(animation_steps))
+        for step in range(total_steps + 1):
+            progress = step / total_steps
+            frame_data = []
+            for detail in results["route_details"]:
+                points = [np.array(p, dtype=float) for p in detail["waypoints"]]
+                x, y = _polyline_point(points, progress)
+                frame_data.append(go.Scatter(x=[x], y=[y]))
+            frames.append(go.Frame(data=frame_data, traces=bus_trace_indices, name=f"f{step}"))
+        fig.frames = frames
+
     # ── Layout ───────────────────────────────────────────────────────────────
     fig.update_layout(
-        plot_bgcolor="#0f172a",
+        plot_bgcolor="#0f172a" if not is_pixel else "#0e2619",
         paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#94a3b8"),
+        font=dict(color="#e2e8f0" if is_pixel else "#94a3b8"),
         xaxis=dict(range=[-2, mw + 2], showgrid=False, zeroline=False,
-                   title="X", color="#475569", constrain="domain"),
+                   title="X", color="#334155", constrain="domain"),
         yaxis=dict(range=[-2, mh + 2], showgrid=False, zeroline=False,
-                   title="Y", color="#475569", scaleanchor="x", scaleratio=1),
+                   title="Y", color="#334155", scaleanchor="x", scaleratio=1),
         legend=dict(bgcolor="rgba(30,41,59,0.85)", bordercolor="#334155",
                     borderwidth=1, font=dict(size=11)),
         margin=dict(t=10, b=30, l=40, r=10),
         height=height,
         hovermode="closest",
     )
+
+    if animate_buses and bus_trace_indices:
+        frame_ms = int(max(40, (animation_seconds * 1000) / max(1, animation_steps)))
+        fig.update_layout(
+            updatemenus=[{
+                "type": "buttons",
+                "showactive": False,
+                "direction": "left",
+                "x": 0.01,
+                "y": 1.08,
+                "buttons": [
+                    {
+                        "label": "▶ Play",
+                        "method": "animate",
+                        "args": [None, {"frame": {"duration": frame_ms, "redraw": True},
+                                        "transition": {"duration": 0}, "fromcurrent": True}],
+                    },
+                    {
+                        "label": "⏸ Pause",
+                        "method": "animate",
+                        "args": [[None], {"frame": {"duration": 0, "redraw": False},
+                                           "transition": {"duration": 0}, "mode": "immediate"}],
+                    },
+                ],
+            }],
+            sliders=[{
+                "active": 0,
+                "x": 0.14,
+                "y": 1.08,
+                "len": 0.84,
+                "currentvalue": {"prefix": "Route progress: "},
+                "pad": {"t": 0, "b": 0},
+                "steps": [
+                    {
+                        "label": f"{int((i / max(1, animation_steps)) * 100)}%",
+                        "method": "animate",
+                        "args": [[f"f{i}"], {"frame": {"duration": 0, "redraw": True},
+                                             "transition": {"duration": 0}, "mode": "immediate"}],
+                    }
+                    for i in range(animation_steps + 1)
+                ],
+            }],
+        )
     return fig
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -394,11 +587,32 @@ tab_map, tab_routes, tab_stats, tab_board, tab_ach, tab_cmp = st.tabs([
 
 # ── MAP TAB ───────────────────────────────────────────────────────────────────
 with tab_map:
+    style_col, anim_col1, anim_col2 = st.columns([2, 2, 3])
+    display_style = style_col.selectbox(
+        "Map view style",
+        MAP_STYLES,
+        index=MAP_STYLES.index(latest.get("map_style", "Grid City")) if latest.get("map_style", "Grid City") in MAP_STYLES else 0,
+        key="display_map_style",
+        help="Change map appearance here without re-running optimization.",
+    )
+    animate_buses = anim_col1.toggle("Animate bus movement", value=True)
+    animation_steps = anim_col2.slider(
+        "Animation smoothness",
+        min_value=20,
+        max_value=120,
+        value=70,
+        step=10,
+        disabled=not animate_buses,
+    )
     fig_map = render_custom_map(
         dataset, results,
-        style=latest.get("map_style", "Grid City"),
+        style=display_style,
+        animate_buses=animate_buses,
+        animation_steps=animation_steps,
     )
     st.plotly_chart(fig_map, use_container_width=True)
+    if not results.get("route_details"):
+        st.warning("No routes were generated for this run. Try KMeans clustering or add more stops.")
 
 # ── ROUTES TAB ────────────────────────────────────────────────────────────────
 with tab_routes:
@@ -463,37 +677,48 @@ with tab_routes:
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-            # Mini Plotly route map
+            # Mini custom-map route plot (no real-world geo projection)
             route_pts = [depot.tolist()] + [pickup_locs[idx].tolist() for idx in detail["route"]] + [dest.tolist()]
-            rlat = [p[0] for p in route_pts]
-            rlon = [p[1] for p in route_pts]
+            rx = [p[0] for p in route_pts]
+            ry = [p[1] for p in route_pts]
             fig_r = go.Figure()
-            fig_r.add_trace(go.Scattergeo(
-                lat=rlat, lon=rlon,
+            fig_r.add_trace(go.Scatter(
+                x=rx, y=ry,
                 mode="lines+markers",
                 line=dict(color=color, width=2),
                 marker=dict(size=8, color=color),
                 name=f"Bus {i+1}",
             ))
             # Depot & destination
-            fig_r.add_trace(go.Scattergeo(
-                lat=[float(depot[0]), float(dest[0])],
-                lon=[float(depot[1]), float(dest[1])],
+            fig_r.add_trace(go.Scatter(
+                x=[float(depot[0]), float(dest[0])],
+                y=[float(depot[1]), float(dest[1])],
                 mode="markers+text",
-                marker=dict(size=14, color=["green","purple"], symbol="square"),
+                marker=dict(size=14, color=["#22c55e", "#a855f7"], symbol="diamond"),
                 text=["Depot","Destination"], textposition="top center",
                 name="Key Points",
             ))
             fig_r.update_layout(
-                geo=dict(
-                    showland=True, landcolor="#1e293b",
-                    showocean=True, oceancolor="#0f172a",
-                    showcoastlines=True, coastlinecolor="#475569",
-                    projection_type="natural earth",
-                    fitbounds="locations",
+                xaxis=dict(
+                    title="X",
+                    range=[-2, float(dataset.get("map_width", 100)) + 2],
+                    showgrid=False,
+                    zeroline=False,
+                    color="#94a3b8",
+                ),
+                yaxis=dict(
+                    title="Y",
+                    range=[-2, float(dataset.get("map_height", 100)) + 2],
+                    showgrid=False,
+                    zeroline=False,
+                    scaleanchor="x",
+                    scaleratio=1,
+                    color="#94a3b8",
                 ),
                 margin=dict(t=0, b=0, l=0, r=0), height=280,
-                paper_bgcolor="rgba(0,0,0,0)", showlegend=False,
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="#0f172a",
+                showlegend=False,
             )
             st.plotly_chart(fig_r, use_container_width=True)
 

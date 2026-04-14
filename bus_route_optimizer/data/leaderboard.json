@@ -98,6 +98,101 @@
   },
   {
     "player": "Optimizer",
+    "score": 12.3,
+    "stars": 1,
+    "xp_earned": 75,
+    "achievements": [
+      "\u26a1 Speed Demon"
+    ],
+    "config": {
+      "stops": 20,
+      "buses": 2,
+      "clustering": "dbscan",
+      "routing": "nn",
+      "map_style": "Pixel Adventure",
+      "challenge": false
+    },
+    "timestamp": "2026-04-14 17:36"
+  },
+  {
+    "player": "Optimizer",
+    "score": 11.9,
+    "stars": 1,
+    "xp_earned": 145,
+    "achievements": [
+      "\u26a1 Speed Demon",
+      "\ud83e\uddb8 Hybrid Hero"
+    ],
+    "config": {
+      "stops": 20,
+      "buses": 2,
+      "clustering": "kmeans",
+      "routing": "hybrid",
+      "map_style": "Pixel Adventure",
+      "challenge": false
+    },
+    "timestamp": "2026-04-14 17:33"
+  },
+  {
+    "player": "Optimizer",
+    "score": 11.9,
+    "stars": 1,
+    "xp_earned": 145,
+    "achievements": [
+      "\u26a1 Speed Demon",
+      "\ud83e\uddb8 Hybrid Hero"
+    ],
+    "config": {
+      "stops": 20,
+      "buses": 2,
+      "clustering": "kmeans",
+      "routing": "hybrid",
+      "map_style": "Pixel Adventure",
+      "challenge": false
+    },
+    "timestamp": "2026-04-14 17:36"
+  },
+  {
+    "player": "Optimizer",
+    "score": 11.9,
+    "stars": 1,
+    "xp_earned": 345,
+    "achievements": [
+      "\u26a1 Speed Demon",
+      "\ud83e\uddb8 Hybrid Hero",
+      "\ud83d\udd25 On Fire"
+    ],
+    "config": {
+      "stops": 20,
+      "buses": 2,
+      "clustering": "dbscan",
+      "routing": "hybrid",
+      "map_style": "Pixel Adventure",
+      "challenge": false
+    },
+    "timestamp": "2026-04-14 17:36"
+  },
+  {
+    "player": "Optimizer",
+    "score": 11.7,
+    "stars": 1,
+    "xp_earned": 145,
+    "achievements": [
+      "\u26a1 Speed Demon",
+      "\ud83e\uddb8 Hybrid Hero"
+    ],
+    "config": {
+      "stops": 20,
+      "buses": 2,
+      "clustering": "kmeans",
+      "routing": "hybrid",
+      "map_style": "Pixel Adventure",
+      "challenge": false
+    },
+    "timestamp": "2026-04-14 17:38"
+  },
+  {
+    "player": "Optimizer",
     "score": 11.6,
     "stars": 1,
     "xp_earned": 145,
@@ -114,5 +209,24 @@
       "challenge": false
     },
     "timestamp": "2026-04-14 17:19"
+  },
+  {
+    "player": "Optimizer",
+    "score": 11.6,
+    "stars": 1,
+    "xp_earned": 145,
+    "achievements": [
+      "\u26a1 Speed Demon",
+      "\ud83e\uddb8 Hybrid Hero"
+    ],
+    "config": {
+      "stops": 20,
+      "buses": 2,
+      "clustering": "kmeans",
+      "routing": "hybrid",
+      "map_style": "Grid City",
+      "challenge": false
+    },
+    "timestamp": "2026-04-14 17:30"
   }
 ]
