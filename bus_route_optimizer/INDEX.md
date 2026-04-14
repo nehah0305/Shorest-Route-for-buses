@@ -29,6 +29,7 @@ Welcome to the Bus Route Optimization System! This guide helps you navigate the 
 📄 README.md              → Full system documentation
 📄 QUICKSTART.md          → 5-minute setup guide  
 📄 CONFIGURATION.md       → Customization guide
+📄 TECHNICAL_REFERENCE.md → Detailed engineering reference
 📄 PROJECT_SUMMARY.md     → Project overview & statistics
 📄 INDEX.md              → This file
 ```

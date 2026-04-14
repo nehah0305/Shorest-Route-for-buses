@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.ipynb_checkpoints/
+
+bus_route_optimizer/__pycache__/
+bus_route_optimizer/modules/__pycache__/
+bus_route_optimizer/visualizations/
+bus_route_optimizer/.streamlit/
+bus_route_optimizer/data/leaderboard.json
+
+*.log
+*.tmp
+*.bak
+Thumbs.db
